@@ -36,6 +36,8 @@ let bassIndex = 0;
 const musicMelody = [523.25, 659.25, 783.99, 659.25, 523.25, 659.25, 880.0, 783.99, 698.46, 659.25];
 const musicBass = [130.81, 146.83, 164.81, 146.83, 110.0, 123.47];
 
+let pressedCodes = new Set();
+
 function setup() {
   createCanvas(960, 540);
   textFont('monospace');
@@ -44,6 +46,7 @@ function setup() {
   buildModeButtons();
   buildPauseButtons();
   buildForceChoiceButtons();
+  installInputHandlers();
   resetGame();
 }
 
@@ -91,10 +94,10 @@ function resetGame() {
 
 function createPlayers() {
   let p1 = createPlayer(0, 'P1', 120, color(255, 90, 110), color(255, 220, 160), {
-    left: 65, right: 68, jump: 87, down: 83, attack: 32, attackLabel: 'SPACE'
+    left: 'KeyA', right: 'KeyD', jump: 'KeyW', down: 'KeyS', attack: 'Space', attackLabel: 'SPACE'
   });
   let p2 = createPlayer(1, 'P2', 172, color(90, 170, 255), color(200, 235, 255), {
-    left: LEFT_ARROW, right: RIGHT_ARROW, jump: UP_ARROW, down: DOWN_ARROW, attack: 191, attackLabel: '/ ?'
+    left: 'ArrowLeft', right: 'ArrowRight', jump: 'ArrowUp', down: 'ArrowDown', attack: 'Slash', attackLabel: '/ ?'
   });
   if (gameMode === 'single') {
     p1.active = false;
@@ -113,6 +116,7 @@ function createPlayer(id, name, x, bodyColor, detailColor, controls) {
     coins: 0, xp: 0, score: 0, hurtTimer: 0, invincibleTimer: 0,
     fireTimer: 0, iceTimer: 0, saberTimer: 0, darkTimer: 0, lightTimer: 0, shieldTimer: 0,
     shotCooldown: 0, saberCooldown: 0, saberSwingTimer: 0, jumpBufferTimer: 0, coyoteTimer: 0,
+    jumpHeldPrev: false, attackHeldPrev: false,
     shotMode: 'fire', facing: 1, bodyColor, detailColor, controls, checkpointX: 120
   };
 }
@@ -396,19 +400,55 @@ function updatePlayerTimers(p) {
   if (p.coyoteTimer > 0) p.coyoteTimer--;
 }
 
+function installInputHandlers() {
+  const preventCodes = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'Slash', 'KeyA', 'KeyD', 'KeyS', 'KeyW']);
+  window.addEventListener('keydown', (event) => {
+    pressedCodes.add(event.code);
+    if (preventCodes.has(event.code)) event.preventDefault();
+  }, { passive: false });
+  window.addEventListener('keyup', (event) => {
+    pressedCodes.delete(event.code);
+    if (preventCodes.has(event.code)) event.preventDefault();
+  }, { passive: false });
+  window.addEventListener('blur', clearPressedCodes);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) clearPressedCodes();
+  });
+}
+
+function clearPressedCodes() {
+  pressedCodes.clear();
+  for (let p of players) {
+    if (!p) continue;
+    p.downHeld = false;
+    p.attackHeld = false;
+    p.forceFiring = false;
+    p.jumpHeldPrev = false;
+    p.attackHeldPrev = false;
+  }
+}
+
 function isControlDown(code) {
-  return keyIsDown(code);
+  return pressedCodes.has(code);
 }
 
 function handleInputs() {
   for (let p of activePlayers()) {
     if (!p.alive || p.finished) continue;
     let move = 0;
-    if (isControlDown(p.controls.left)) move -= 1;
-    if (isControlDown(p.controls.right)) move += 1;
+    let leftDown = isControlDown(p.controls.left);
+    let rightDown = isControlDown(p.controls.right);
+    let jumpDown = isControlDown(p.controls.jump);
+    let attackDown = isControlDown(p.controls.attack);
+    if (leftDown) move -= 1;
+    if (rightDown) move += 1;
     p.downHeld = isControlDown(p.controls.down);
-    p.attackHeld = isControlDown(p.controls.attack);
-    p.forceFiring = (p.darkTimer > 0 || p.lightTimer > 0) && p.attackHeld;
+    p.attackHeld = attackDown;
+    p.forceFiring = (p.darkTimer > 0 || p.lightTimer > 0) && attackDown;
+
+    if (jumpDown && !p.jumpHeldPrev) queueJumpForPlayer(p);
+    if (attackDown && !p.attackHeldPrev && !(p.darkTimer > 0 || p.lightTimer > 0)) tryAttack(p);
+
     updatePlayerSize(p);
     let maxSpeed = p.crouching ? 2.2 : 4.8;
     if (!p.big) maxSpeed += 0.4;
@@ -417,6 +457,9 @@ function handleInputs() {
     p.vx = lerp(p.vx, target, accel);
     if (abs(p.vx) < 0.05) p.vx = 0;
     if (move !== 0) p.facing = move;
+
+    p.jumpHeldPrev = jumpDown;
+    p.attackHeldPrev = attackDown;
   }
 }
 
@@ -1370,11 +1413,6 @@ function keyPressed() {
   if (scene === 'playing' && (key === 'p' || key === 'P')) { paused = !paused; showMessage(paused ? 'Paused' : 'Back in action!'); return false; }
   if (scene === 'playing' && paused) return false;
   if (scene === 'playing') {
-    for (let p of activePlayers()) {
-      if (!p.alive || p.finished) continue;
-      if (keyCode === p.controls.jump) queueJumpForPlayer(p);
-      if (keyCode === p.controls.attack) tryAttack(p);
-    }
     return false;
   }
   if ((scene === 'gameover' || scene === 'win') && (key === 'r' || key === 'R')) {
@@ -1419,6 +1457,7 @@ function mousePressed() {
 
 function chooseForceSide(side) {
   if (!pendingForceChoice) return;
+  clearPressedCodes();
   let p = players[pendingForceChoice.playerId];
   if (!p) { pendingForceChoice = null; paused = false; return; }
   if (side === 'dark') { p.darkTimer = 60 * 12; p.lightTimer = 0; p.forceFiring = false; showMessage(`${p.name} joined the dark side: hold ${p.controls.attackLabel} for Force lightning.`); }
@@ -1426,8 +1465,8 @@ function chooseForceSide(side) {
   pendingForceChoice = null; paused = false;
 }
 
-function startGame() { startAudio(); scene = 'playing'; paused = false; showMessage(gameMode === 'co-op' ? 'Co-op run started!' : 'Single-player run started!'); }
-function returnToMainMenu() { paused = false; pendingForceChoice = null; resetGame(); showMessage('Back at the main menu. Choose single player or co-op.'); }
+function startGame() { clearPressedCodes(); startAudio(); scene = 'playing'; paused = false; showMessage(gameMode === 'co-op' ? 'Co-op run started!' : 'Single-player run started!'); }
+function returnToMainMenu() { clearPressedCodes(); paused = false; pendingForceChoice = null; resetGame(); showMessage('Back at the main menu. Choose single player or co-op.'); }
 function queueJumpForPlayer(p) { if (scene !== 'playing' || paused || !p || !p.alive) return; p.jumpBufferTimer = 10; }
 function tryJump(p) { if (paused || !p.alive || p.crouching) return; if (!(p.onGround || p.coyoteTimer > 0)) return; p.jumpBufferTimer = 0; p.coyoteTimer = 0; p.vy = p.big ? -14.2 : -13.1; p.onGround = false; playSfx('jump'); }
 function getCurrentShotType(p) { if (p.shotMode === 'fire' && p.fireTimer > 0) return 'fire'; if (p.shotMode === 'ice' && p.iceTimer > 0) return 'ice'; if (p.fireTimer > 0) return 'fire'; if (p.iceTimer > 0) return 'ice'; return null; }
@@ -1439,9 +1478,10 @@ function tryAttack(p) {
   let mode = getCurrentShotType(p);
   if (mode) { let speed = mode === 'fire' ? 8.5 : 7.5; projectiles.push({ ownerId: p.id, x: p.x + p.w * 0.5 + p.facing * (p.w * 0.55), y: p.y + p.h * 0.42, vx: speed * p.facing, vy: mode === 'fire' ? -0.4 : 0, r: mode === 'fire' ? 8 : 9, life: 110, type: mode }); p.shotCooldown = 16; playSfx('shoot'); }
 }
-function restartLevelFromPause() { buildBackground(); buildLevel(); players = createPlayers(); checkpointX = 120; checkpointReached = false; gameTicks = 0; cameraX = 0; projectiles = []; pendingForceChoice = null; paused = false; scene = 'playing'; showMessage('Level restarted from the beginning.'); }
-function restartFromScratch() { buildBackground(); pendingForceChoice = null; resetGame(); startAudio(); scene = 'playing'; paused = false; showMessage(gameMode === 'co-op' ? 'Fresh co-op run from the very beginning!' : 'Fresh single-player run from the very beginning!'); }
+function restartLevelFromPause() { clearPressedCodes(); buildBackground(); buildLevel(); players = createPlayers(); checkpointX = 120; checkpointReached = false; gameTicks = 0; cameraX = 0; projectiles = []; pendingForceChoice = null; paused = false; scene = 'playing'; showMessage('Level restarted from the beginning.'); }
+function restartFromScratch() { clearPressedCodes(); buildBackground(); pendingForceChoice = null; resetGame(); startAudio(); scene = 'playing'; paused = false; showMessage(gameMode === 'co-op' ? 'Fresh co-op run from the very beginning!' : 'Fresh single-player run from the very beginning!'); }
 function continueFromCheckpointAfterGameOver() {
+  clearPressedCodes();
   pendingForceChoice = null;
   paused = false;
   scene = 'playing';
