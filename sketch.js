@@ -9,7 +9,6 @@ let highScore = 0;
 let gameTicks = 0;
 let levelMessage = '';
 let levelMessageTimer = 0;
-
 let players = [];
 let solids = [];
 let enemies = [];
@@ -397,14 +396,18 @@ function updatePlayerTimers(p) {
   if (p.coyoteTimer > 0) p.coyoteTimer--;
 }
 
+function isControlDown(code) {
+  return keyIsDown(code);
+}
+
 function handleInputs() {
   for (let p of activePlayers()) {
     if (!p.alive || p.finished) continue;
     let move = 0;
-    if (keyIsDown(p.controls.left)) move -= 1;
-    if (keyIsDown(p.controls.right)) move += 1;
-    p.downHeld = keyIsDown(p.controls.down);
-    p.attackHeld = keyIsDown(p.controls.attack);
+    if (isControlDown(p.controls.left)) move -= 1;
+    if (isControlDown(p.controls.right)) move += 1;
+    p.downHeld = isControlDown(p.controls.down);
+    p.attackHeld = isControlDown(p.controls.attack);
     p.forceFiring = (p.darkTimer > 0 || p.lightTimer > 0) && p.attackHeld;
     updatePlayerSize(p);
     let maxSpeed = p.crouching ? 2.2 : 4.8;
@@ -1367,10 +1370,11 @@ function keyPressed() {
   if (scene === 'playing' && (key === 'p' || key === 'P')) { paused = !paused; showMessage(paused ? 'Paused' : 'Back in action!'); return false; }
   if (scene === 'playing' && paused) return false;
   if (scene === 'playing') {
-    if (keyCode === 87 && gameMode === 'co-op') queueJumpForPlayer(players[0]);
-    if (keyCode === UP_ARROW) queueJumpForPlayer(players[1]);
-    if (keyCode === 32 && gameMode === 'co-op') tryAttack(players[0]);
-    if (keyCode === 191) tryAttack(players[1]);
+    for (let p of activePlayers()) {
+      if (!p.alive || p.finished) continue;
+      if (keyCode === p.controls.jump) queueJumpForPlayer(p);
+      if (keyCode === p.controls.attack) tryAttack(p);
+    }
     return false;
   }
   if ((scene === 'gameover' || scene === 'win') && (key === 'r' || key === 'R')) {
@@ -1378,6 +1382,10 @@ function keyPressed() {
     else restartFromScratch();
     return false;
   }
+}
+
+function keyReleased() {
+  return false;
 }
 
 function mousePressed() {
