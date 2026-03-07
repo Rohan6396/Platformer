@@ -11,15 +11,23 @@
       background: #0f1720;
       overflow: hidden;
       font-family: monospace;
+      height: 100%;
+    }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     canvas {
       display: block;
       margin: 0 auto;
+      box-shadow: 0 18px 50px rgba(0,0,0,0.35);
+      border-radius: 8px;
     }
   </style>
 </head>
 <body>
-  <script src="https://cdn.jsdelivr.net/npm/[email protected]/lib/p5.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/p5/lib/p5.min.js"></script>
   <script src="sketch.js"></script>
 </body>
 </html>
