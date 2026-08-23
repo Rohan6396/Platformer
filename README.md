@@ -1,0 +1,51 @@
+# Skybound Circuit DX
+
+Skybound Circuit DX is a one- or two-player arcade platformer that runs directly in the browser. Race through six themed stages, defeat a different guardian in each world, collect hidden sky shards, and unlock new pilots.
+
+## What is included
+
+- Six distinct worlds with their own palettes, platform layouts, hazards, weather, stories, and bosses
+- Solo play and local co-op, including partner rescue bubbles and a fair finish countdown
+- Always-available melee combat plus blaster, frost, prism, storm, gale, and shield abilities
+- Coyote time, jump buffering, variable jump height, checkpoints, hit feedback, and camera smoothing
+- Persistent stage unlocks, pilots, shards, scores, times, and grades using local storage
+- Explorer, Arcade, and Overdrive difficulties
+- Keyboard remapping, gamepad support, touch controls, fullscreen, sound controls, reduced motion, and high contrast
+- Responsive presentation for desktop, tablet, and phone screens
+- Synthesized music and sound effects with no audio downloads
+
+## Play
+
+Open the [live GitHub Pages build](https://rohan6396.github.io/Platformer/) or serve the repository locally:
+
+```sh
+python3 -m http.server 8000
+```
+
+Then visit `http://localhost:8000`.
+
+## Controls
+
+| Action | Player 1 | Player 2 |
+| --- | --- | --- |
+| Move | A / D | Left / Right |
+| Jump | W | Up |
+| Crouch | S | Down |
+| Attack | Space | / |
+| Pause | P or Escape | P or Escape |
+
+Controls can be remapped from Settings. On touch devices, an on-screen controller appears automatically. Standard gamepads are detected during play.
+
+## Grades and progression
+
+Finish a stage to unlock the next world. A high grade rewards fast clears, all three shards, and no damage. Replays preserve the best score, fastest time, best grade, and most shards collected for each stage.
+
+## Development
+
+The game deliberately uses browser-native JavaScript and p5.js without a build step. Run all checks with Node 22 or newer:
+
+```sh
+npm run verify
+```
+
+The GitHub Actions workflow runs the same syntax and feature checks for every pull request and push to `main`.

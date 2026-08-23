@@ -1,1552 +1,1857 @@
-let scene = 'start';
-let paused = false;
+'use strict';
+
+const CFG = GameConfig;
+const W = CFG.WIDTH;
+const H = CFG.HEIGHT;
+const GROUND = CFG.GROUND_Y;
+
+let scene = 'menu';
 let gameMode = 'single';
-let worldWidth = 24000;
-let groundY = 440;
-let gravity = 0.9;
-let cameraX = 0;
-let highScore = 0;
-let gameTicks = 0;
-let levelMessage = '';
-let levelMessageTimer = 0;
+let selectedStage = 0;
+let selectedCharacter = 0;
+let selectedPath = 'storm';
+let settings = GameStorage.loadSettings();
+let progress = GameStorage.loadProgress();
+let world = null;
 let players = [];
-let solids = [];
-let enemies = [];
-let coins = [];
-let powerUps = [];
-let projectiles = [];
-let finishFlag = null;
+let cameraX = 0;
+let gameFrame = 0;
+let runTime = 0;
 let checkpointX = 120;
-let checkpointReached = false;
-let checkpointMarkerX = 11850;
-
-let modeButtons = [];
+let message = '';
+let messageTimer = 0;
+let particles = [];
+let screenShake = 0;
+let hitStop = 0;
+let pendingChoice = null;
+let finishCountdown = -1;
+let result = null;
+let stageStats = null;
+let menuButtons = [];
+let choiceButtons = [];
 let pauseButtons = [];
-let forceChoiceButtons = [];
-let pendingForceChoice = null;
-
 let stars = [];
-let clouds = [];
-let hills = [];
-
-let audioCtx = null;
-let audioStarted = false;
-let musicIndex = 0;
-let bassIndex = 0;
-const musicMelody = [523.25, 659.25, 783.99, 659.25, 523.25, 659.25, 880.0, 783.99, 698.46, 659.25];
-const musicBass = [130.81, 146.83, 164.81, 146.83, 110.0, 123.47];
-
-let pressedCodes = new Set();
+let motes = [];
+let lastGamepadPause = false;
 
 function setup() {
-  createCanvas(960, 540);
+  const renderer = createCanvas(W, H);
+  renderer.parent('canvas-mount');
+  renderer.elt.tabIndex = 0;
+  renderer.elt.setAttribute('role', 'application');
+  renderer.elt.setAttribute('aria-label', 'Skybound Circuit DX game. Use the keyboard, touch controls, or a gamepad.');
+  pixelDensity(Math.min(2, window.devicePixelRatio || 1));
   textFont('monospace');
-  loadHighScore();
-  buildBackground();
-  buildModeButtons();
+  frameRate(60);
+  GameInput.install();
+  installGameEvents();
+  selectedStage = progress.selectedStage;
+  selectedCharacter = getValidCharacterIndex(progress.selectedCharacter);
+  buildMenuButtons();
+  buildChoiceButtons();
   buildPauseButtons();
-  buildForceChoiceButtons();
-  installInputHandlers();
-  resetGame();
+  buildAtmosphere();
+  loadPreview();
+  showMessage('Choose a stage, pilot, and mode. Then launch.');
+}
+
+function installGameEvents() {
+  window.addEventListener('game-settings-changed', (event) => {
+    settings = event.detail;
+    GameAudio.applySettings(settings);
+    showMessage(`Difficulty set to ${CFG.difficulties[settings.difficulty].label}.`);
+  });
+  window.addEventListener('game-autopause', () => {
+    if (scene === 'playing') {
+      scene = 'pause';
+      showMessage('Auto-paused.');
+    }
+  });
+  window.addEventListener('game-progress-reset', () => {
+    progress = GameStorage.loadProgress();
+    selectedStage = 0;
+    selectedCharacter = 0;
+    scene = 'menu';
+    loadPreview();
+    showMessage('Progress reset. Sunmeadow Launch is ready.');
+  });
+  window.addEventListener('game-message', (event) => showMessage(String(event.detail || '')));
 }
 
 function draw() {
-  drawSky();
+  const step = constrain(deltaTime / (1000 / 60), 0.25, 1.8);
+  GameInput.pollGamepads();
+  handleGamepadPause();
 
-  if (scene === 'playing' && !paused && !pendingForceChoice) {
-    updateGame();
-  }
+  if (scene === 'playing' && hitStop <= 0) updateGame(step);
+  else if (hitStop > 0) hitStop -= step;
 
-  updateCamera();
-
-  push();
-  translate(-cameraX, 0);
-  drawWorld();
-  pop();
-
-  drawHUD();
-
-  if (scene === 'start') drawStartScreen();
-  else if (pendingForceChoice) drawForceChoiceScreen();
-  else if (paused) drawPauseScreen();
-  else if (scene === 'gameover') {
-    drawOverlay('GAME OVER', checkpointReached ? 'Press R to continue from the checkpoint' : 'Press R to restart from the beginning');
-  }
-  else if (scene === 'win') drawOverlay('YOU WIN!', 'Press R to start a fresh run from the start');
+  updateParticles(step);
+  if (messageTimer > 0 && scene !== 'pause' && scene !== 'choice') messageTimer -= step;
+  screenShake = max(0, screenShake - 0.55 * step);
+  drawGame();
 }
 
-function resetGame() {
-  buildLevel();
-  players = createPlayers();
-  checkpointX = 120;
-  checkpointReached = false;
-  pendingForceChoice = null;
-  paused = false;
-  gameTicks = 0;
+function handleGamepadPause() {
+  const down = Boolean(navigator.getGamepads && Array.from(navigator.getGamepads()).filter(Boolean).some((pad) => pad.buttons[9]?.pressed));
+  if (down && !lastGamepadPause) togglePause();
+  lastGamepadPause = down;
+}
+
+function buildAtmosphere() {
+  randomSeed(9137 + selectedStage * 101);
+  stars = Array.from({ length: 90 }, () => ({ x: random(W), y: random(30, 330), s: random(1, 3), phase: random(TWO_PI) }));
+  motes = Array.from({ length: 48 }, (_, index) => ({ x: random(W + 160), y: random(H), s: random(1.5, 4), speed: random(0.25, 1.1), phase: index * 0.71 }));
+}
+
+function getValidCharacterIndex(requested) {
+  const character = CFG.characters[requested] || CFG.characters[0];
+  return progress.unlockedStages >= character.unlockStage ? requested : 0;
+}
+
+function loadPreview() {
+  world = GameLevels.createStage(selectedStage, settings.difficulty);
+  players = createPlayers(150);
   cameraX = 0;
-  projectiles = [];
-  scene = 'start';
-  levelMessage = gameMode === 'co-op'
-    ? 'Co-op mode ready: work together, bounce off each other, and survive.'
-    : 'Single-player mode ready: arrows to move, / to attack.';
-  levelMessageTimer = 260;
+  particles = [];
+  buildAtmosphere();
 }
 
-function createPlayers() {
-  let p1 = createPlayer(0, 'P1', 120, color(255, 90, 110), color(255, 220, 160), {
-    left: 'KeyA', right: 'KeyD', jump: 'KeyW', down: 'KeyS', attack: 'Space', attackLabel: 'SPACE'
-  });
-  let p2 = createPlayer(1, 'P2', 172, color(90, 170, 255), color(200, 235, 255), {
-    left: 'ArrowLeft', right: 'ArrowRight', jump: 'ArrowUp', down: 'ArrowDown', attack: 'Slash', attackLabel: '/ ?'
-  });
+function startRun() {
+  settings = GameInput.getSettings();
+  world = GameLevels.createStage(selectedStage, settings.difficulty);
+  checkpointX = 120;
+  players = createPlayers(checkpointX);
+  cameraX = 0;
+  gameFrame = 0;
+  runTime = 0;
+  particles = [];
+  screenShake = 0;
+  hitStop = 0;
+  pendingChoice = null;
+  finishCountdown = -1;
+  result = null;
+  stageStats = { retries: 0, rescuedFinish: false, bossDefeated: false, damageTaken: 0 };
+  scene = 'playing';
+  GameInput.clear();
+  GameAudio.start();
+  GameAudio.resetMusic();
+  showMessage(`${CFG.stages[selectedStage].name}: ${CFG.stages[selectedStage].story}`);
+  document.querySelector('#canvas-mount canvas')?.focus();
+}
+
+function createPlayers(spawnX) {
+  const character = CFG.characters[selectedCharacter];
+  const startingLives = CFG.difficulties[settings.difficulty].startingLives;
+  const p1 = createPlayer(0, 0, 'P1', spawnX, character, startingLives, '#ff7892');
+  const p2 = createPlayer(1, 1, gameMode === 'single' ? 'P1' : 'P2', spawnX + 52, character, startingLives, '#68b4ff');
   if (gameMode === 'single') {
     p1.active = false;
     p1.alive = false;
     p1.lives = 0;
-    p2.name = 'P1';
   }
   return [p1, p2];
 }
 
-function createPlayer(id, name, x, bodyColor, detailColor, controls) {
+function createPlayer(id, controlIndex, name, x, character, lives, fallbackColor) {
   return {
-    id, name, active: true, x, y: 280, w: 34, h: 46, vx: 0, vy: 0, prevY: 0,
-    onGround: false, crouching: false, downHeld: false, attackHeld: false, forceFiring: false,
-    big: true, lives: 2, maxLives: 2, alive: true, finished: false,
-    coins: 0, xp: 0, score: 0, hurtTimer: 0, invincibleTimer: 0,
-    fireTimer: 0, iceTimer: 0, saberTimer: 0, darkTimer: 0, lightTimer: 0, shieldTimer: 0,
-    shotCooldown: 0, saberCooldown: 0, saberSwingTimer: 0, jumpBufferTimer: 0, coyoteTimer: 0,
-    jumpHeldPrev: false, attackHeldPrev: false,
-    shotMode: 'fire', facing: 1, bodyColor, detailColor, controls, checkpointX: 120
+    id, controlIndex, name, active: true, alive: true, finished: false,
+    x, y: 315, prevY: 315, w: 32, h: 44, vx: 0, vy: 0, facing: 1,
+    onGround: false, wasOnGround: false, crouching: false, big: true,
+    lives, maxLives: lives, coins: 0, shards: 0, score: 0,
+    coyoteTimer: 0, jumpBufferTimer: 0, jumpHeldPrev: false, attackHeldPrev: false,
+    attackCooldown: 0, attackAnim: 0, hurtTimer: 0, invincibleTimer: 0,
+    rescueTimer: 0, checkpointX: x,
+    shotMode: 'blaster',
+    powers: { blaster: 0, frost: 0, prism: 0, storm: 0, gale: 0, shield: 0 },
+    bodyColor: id === 0 ? fallbackColor : character.body,
+    detailColor: character.detail,
+    trailColor: character.trail
   };
 }
 
-function activePlayers() { return players.filter(p => p.active); }
-function livingPlayers() { return players.filter(p => p.active && p.alive); }
+function activePlayers() { return players.filter((player) => player.active); }
+function livingPlayers() { return players.filter((player) => player.active && player.alive); }
+function runScore() { return activePlayers().reduce((sum, player) => sum + player.score, 0); }
 
-function buildModeButtons() {
-  modeButtons = [
-    { mode: 'single', x: width / 2 - 220, y: 392, w: 180, h: 56, label: 'Single Player' },
-    { mode: 'co-op', x: width / 2 + 40, y: 392, w: 180, h: 56, label: 'Co-op' }
+function updateGame(step) {
+  gameFrame += step;
+  runTime += deltaTime / 1000;
+  GameAudio.updateMusic(selectedStage, true);
+
+  updatePlayerInputs(step);
+  activePlayers().forEach((player) => updatePlayer(player, step));
+  updateCoopLeash();
+  updateEnemies(step);
+  updateProjectiles(step);
+  updateHazards(step);
+  collectItems();
+  updateCheckpoint();
+  updateFinish(step);
+  updateCamera(step);
+}
+
+function updatePlayerInputs(step) {
+  activePlayers().forEach((player) => {
+    if (!player.alive || player.finished) return;
+    tickPlayerTimers(player, step);
+    const left = isPlayerActionDown(player, 'left');
+    const right = isPlayerActionDown(player, 'right');
+    const down = isPlayerActionDown(player, 'down');
+    const jump = isPlayerActionDown(player, 'jump');
+    const attack = isPlayerActionDown(player, 'attack');
+    const move = (right ? 1 : 0) - (left ? 1 : 0);
+
+    if (jump && !player.jumpHeldPrev) player.jumpBufferTimer = 9;
+    if (!jump && player.jumpHeldPrev && player.vy < -4.2) player.vy *= 0.48;
+    if (attack && !player.attackHeldPrev) performAttack(player);
+
+    updatePlayerSize(player, down);
+    const maxSpeed = player.crouching ? 2.25 : player.big ? 5.05 : 5.35;
+    const acceleration = player.onGround ? 0.31 : 0.17;
+    player.vx += (move * maxSpeed - player.vx) * acceleration * step;
+    if (move === 0 && player.onGround) player.vx *= Math.pow(0.78, step);
+    if (Math.abs(player.vx) < 0.035) player.vx = 0;
+    if (move !== 0) player.facing = move;
+
+    player.jumpHeldPrev = jump;
+    player.attackHeldPrev = attack;
+  });
+}
+
+function isPlayerActionDown(player, action) {
+  if (gameMode !== 'single') return GameInput.isDown(player.controlIndex, action);
+  return GameInput.isDown(0, action) || GameInput.isDown(1, action);
+}
+
+function tickPlayerTimers(player, step) {
+  ['coyoteTimer', 'jumpBufferTimer', 'attackCooldown', 'attackAnim', 'hurtTimer', 'invincibleTimer'].forEach((key) => {
+    player[key] = max(0, player[key] - step);
+  });
+  Object.keys(player.powers).forEach((key) => { player.powers[key] = max(0, player.powers[key] - step); });
+}
+
+function updatePlayerSize(player, down) {
+  const targetW = player.big ? 32 : 22;
+  const standH = player.big ? 44 : 30;
+  const crouchH = player.big ? 25 : 20;
+  player.w = targetW;
+  const wantsCrouch = down && (player.onGround || player.crouching);
+  const targetH = wantsCrouch ? crouchH : standH;
+  if (targetH < player.h) {
+    const feet = player.y + player.h;
+    player.h = targetH;
+    player.y = feet - player.h;
+    player.crouching = true;
+  } else if (targetH > player.h) {
+    const next = { x: player.x, y: player.y - (targetH - player.h), w: player.w, h: targetH };
+    if (!solidOverlap(next)) {
+      player.y -= targetH - player.h;
+      player.h = targetH;
+      player.crouching = false;
+    }
+  }
+}
+
+function updatePlayer(player, step) {
+  if (!player.alive || player.finished) {
+    if (!player.alive && gameMode === 'co-op') updateRescue(player, step);
+    return;
+  }
+  player.prevY = player.y;
+  player.wasOnGround = player.onGround;
+  if (player.onGround) player.coyoteTimer = 8;
+  if (player.jumpBufferTimer > 0 && (player.onGround || player.coyoteTimer > 0) && !player.crouching) jumpPlayer(player);
+
+  player.x += player.vx * step;
+  collidePlayerWithSolids(player, 'x');
+  player.vy = min(17, player.vy + 0.88 * step);
+  player.y += player.vy * step;
+  player.onGround = false;
+  collidePlayerWithSolids(player, 'y');
+
+  if (!player.wasOnGround && player.onGround && player.vy === 0) {
+    spawnBurst(player.x + player.w / 2, player.y + player.h, player.trailColor, 6, 2.1);
+    GameAudio.sfx('land');
+  }
+  player.x = constrain(player.x, 0, CFG.STAGE_WIDTH - player.w);
+  if (player.y > H + 150) damagePlayer(player, 'fell into the cloudbreak', true);
+}
+
+function jumpPlayer(player) {
+  player.jumpBufferTimer = 0;
+  player.coyoteTimer = 0;
+  player.vy = player.big ? -14.4 : -13.5;
+  player.onGround = false;
+  spawnBurst(player.x + player.w / 2, player.y + player.h, player.trailColor, 5, 1.8);
+  GameAudio.sfx('jump');
+}
+
+function activeSolid(solid) {
+  return !(solid.bossGate && world.gateOpen);
+}
+
+function collidePlayerWithSolids(player, axis) {
+  for (const solid of world.solids) {
+    if (!activeSolid(solid) || !rectsOverlap(player, solid)) continue;
+    if (axis === 'x') {
+      if (player.vx > 0) player.x = solid.x - player.w;
+      else if (player.vx < 0) player.x = solid.x + solid.w;
+      player.vx = 0;
+    } else if (player.vy > 0) {
+      player.y = solid.y - player.h;
+      player.vy = 0;
+      player.onGround = true;
+    } else if (player.vy < 0) {
+      player.y = solid.y + solid.h;
+      player.vy = 0;
+    }
+  }
+}
+
+function solidOverlap(box) {
+  return world && world.solids.some((solid) => activeSolid(solid) && rectsOverlap(box, solid));
+}
+
+function performAttack(player) {
+  if (player.attackCooldown > 0 || !player.alive || player.finished) return;
+
+  const poweredShot = player.shotMode === 'frost' ? player.powers.frost > 0 : player.powers.blaster > 0;
+  const fallbackShot = player.powers.blaster > 0 ? 'blaster' : player.powers.frost > 0 ? 'frost' : null;
+  const shotType = poweredShot ? player.shotMode : fallbackShot;
+
+  if (player.powers.storm > 0) {
+    player.attackCooldown = 10;
+    const hitbox = frontHitbox(player, 172, 96);
+    world.enemies.filter((enemy) => enemy.alive && rectsOverlap(hitbox, enemy)).forEach((enemy) => damageEnemy(enemy, 1, player, 'storm'));
+    spawnBurst(hitbox.x + hitbox.w / 2, hitbox.y + hitbox.h / 2, '#8feaff', 14, 4.2);
+    GameAudio.sfx('zap');
+    return;
+  }
+
+  if (player.powers.gale > 0) {
+    player.attackCooldown = 16;
+    const hitbox = frontHitbox(player, 195, 112);
+    world.enemies.filter((enemy) => enemy.alive && rectsOverlap(hitbox, enemy)).forEach((enemy) => {
+      enemy.stunnedTimer = 80;
+      enemy.vx = player.facing * (enemy.boss ? 4.4 : 8.5);
+      enemy.vy = enemy.boss ? -2 : -4.2;
+      if (!enemy.boss) player.score += 12;
+    });
+    spawnBurst(hitbox.x + hitbox.w / 2, hitbox.y + hitbox.h / 2, '#dffcff', 16, 5.2);
+    GameAudio.sfx('push');
+    return;
+  }
+
+  if (shotType) {
+    player.attackCooldown = 14;
+    world.projectiles.push({
+      ownerId: player.id,
+      type: shotType,
+      x: player.x + player.w / 2 + player.facing * 22,
+      y: player.y + player.h * 0.42,
+      vx: player.facing * (shotType === 'frost' ? 8 : 9),
+      vy: shotType === 'frost' ? 0 : -0.25,
+      radius: shotType === 'frost' ? 9 : 7,
+      life: 110
+    });
+    player.attackAnim = 7;
+    GameAudio.sfx('shoot');
+    return;
+  }
+
+  const prism = player.powers.prism > 0;
+  player.attackCooldown = prism ? 15 : 19;
+  player.attackAnim = 10;
+  const reach = prism ? 128 : 58;
+  const hitbox = frontHitbox(player, reach, prism ? 84 : 58);
+  let hit = false;
+  world.enemies.forEach((enemy) => {
+    if (!enemy.alive || !rectsOverlap(hitbox, enemy)) return;
+    damageEnemy(enemy, prism ? 2 : 1, player, prism ? 'prism' : 'basic');
+    hit = true;
+  });
+  spawnBurst(player.x + player.w / 2 + player.facing * reach * 0.58, player.y + player.h * 0.48, prism ? '#79ffe0' : player.trailColor, prism ? 12 : 6, 3.3);
+  GameAudio.sfx(hit ? 'hit' : 'attack');
+}
+
+function frontHitbox(player, reach, heightValue) {
+  return {
+    x: player.facing > 0 ? player.x + player.w - 4 : player.x - reach + 4,
+    y: player.y + player.h / 2 - heightValue / 2,
+    w: reach,
+    h: heightValue
+  };
+}
+
+function updateEnemies(step) {
+  for (const enemy of world.enemies) {
+    if (!enemy.alive) {
+      enemy.deathTimer = max(0, enemy.deathTimer - step);
+      continue;
+    }
+    enemy.hurtTimer = max(0, enemy.hurtTimer - step);
+
+    if (enemy.frozenTimer > 0) {
+      enemy.frozenTimer = max(0, enemy.frozenTimer - step);
+      if (enemy.frozenTimer === 0 && Math.abs(enemy.vx) < 0.05) {
+        const direction = enemy.x > (enemy.left + enemy.right) / 2 ? -1 : 1;
+        enemy.vx = enemy.baseSpeed * direction;
+      }
+    } else {
+      updateEnemyMovement(enemy, step);
+    }
+
+    if (enemy.stunnedTimer > 0) enemy.stunnedTimer = max(0, enemy.stunnedTimer - step);
+    if (enemy.boss) updateBossAttack(enemy, step);
+
+    for (const player of livingPlayers()) {
+      if (player.finished || !enemy.alive || !rectsOverlap(player, enemy)) continue;
+      const previousBottom = player.prevY + player.h;
+      const stomp = player.vy > 0 && previousBottom <= enemy.y + 16 && player.x + player.w > enemy.x + 4 && player.x < enemy.x + enemy.w - 4;
+      if (stomp) {
+        damageEnemy(enemy, 1, player, enemy.frozenTimer > 0 ? 'shatter' : 'stomp');
+        player.vy = -11.8;
+      } else if (player.powers.shield > 0) {
+        damageEnemy(enemy, enemy.boss ? 1 : 2, player, 'shield');
+        player.powers.shield = max(0, player.powers.shield - 70);
+      } else {
+        damagePlayer(player, `was struck by ${enemy.boss ? CFG.stages[selectedStage].bossName : 'a circuit creature'}`);
+      }
+    }
+  }
+}
+
+function updateEnemyMovement(enemy, step) {
+  const slowed = enemy.stunnedTimer > 0;
+  if (slowed) enemy.vx *= Math.pow(0.94, step);
+  if (enemy.kind === 'drone') {
+    enemy.x += enemy.vx * step;
+    if (enemy.x <= enemy.left || enemy.x + enemy.w >= enemy.right) {
+      enemy.x = constrain(enemy.x, enemy.left, enemy.right - enemy.w);
+      enemy.vx = (enemy.vx >= 0 ? -1 : 1) * enemy.baseSpeed;
+    }
+    enemy.y = enemy.baseY + sin(gameFrame * 0.045 + enemy.phase) * 28;
+    return;
+  }
+
+  enemy.x += enemy.vx * step;
+  if (enemy.x <= enemy.left || enemy.x + enemy.w >= enemy.right) {
+    enemy.x = constrain(enemy.x, enemy.left, enemy.right - enemy.w);
+    enemy.vx = (enemy.vx >= 0 ? -1 : 1) * enemy.baseSpeed;
+  }
+  enemy.hopTimer -= step;
+  if ((enemy.kind === 'hopper' || enemy.boss) && enemy.onGround && enemy.hopTimer <= 0) {
+    enemy.vy = enemy.boss ? -9.4 : -8.7;
+    enemy.onGround = false;
+    enemy.hopTimer = enemy.boss ? 86 : 72;
+  }
+  enemy.vy = min(15, enemy.vy + 0.78 * step);
+  enemy.y += enemy.vy * step;
+  enemy.onGround = false;
+  collideEnemyWithSolids(enemy);
+}
+
+function collideEnemyWithSolids(enemy) {
+  for (const solid of world.solids) {
+    if (!activeSolid(solid) || !rectsOverlap(enemy, solid)) continue;
+    if (enemy.vy > 0) {
+      enemy.y = solid.y - enemy.h;
+      enemy.vy = 0;
+      enemy.onGround = true;
+    } else if (enemy.vy < 0) {
+      enemy.y = solid.y + solid.h;
+      enemy.vy = 0;
+    }
+  }
+}
+
+function updateBossAttack(boss, step) {
+  boss.attackTimer -= step;
+  if (boss.attackTimer > 0 || boss.frozenTimer > 0) return;
+  const target = livingPlayers().sort((a, b) => Math.abs(a.x - boss.x) - Math.abs(b.x - boss.x))[0];
+  if (!target) return;
+  const dx = target.x + target.w / 2 - (boss.x + boss.w / 2);
+  const dy = target.y + target.h / 2 - (boss.y + boss.h / 2);
+  const length = max(1, Math.hypot(dx, dy));
+  const speed = 4.6 + selectedStage * 0.22;
+  world.enemyProjectiles.push({ x: boss.x + boss.w / 2, y: boss.y + boss.h / 2, vx: dx / length * speed, vy: dy / length * speed, radius: 10 + selectedStage, life: 180 });
+  boss.attackTimer = max(52, 96 - selectedStage * 7);
+  spawnBurst(boss.x + boss.w / 2, boss.y + boss.h / 2, CFG.stages[selectedStage].palette.hazard, 12, 4);
+  GameAudio.sfx('boss');
+}
+
+function damageEnemy(enemy, amount, owner, style) {
+  if (!enemy.alive || enemy.hurtTimer > 0) return;
+  enemy.hp -= amount;
+  enemy.hurtTimer = enemy.boss ? 11 : 5;
+  enemy.vx += owner ? owner.facing * (enemy.boss ? 1.8 : 3.5) : 0;
+  spawnBurst(enemy.x + enemy.w / 2, enemy.y + enemy.h / 2, style === 'frost' || style === 'shatter' ? '#aeeeff' : CFG.stages[selectedStage].palette.accent, enemy.boss ? 18 : 9, 4.6);
+  if (enemy.boss) {
+    screenShake = max(screenShake, 5);
+    hitStop = max(hitStop, 3.5);
+    GameAudio.sfx('bossHit');
+  }
+  if (enemy.hp > 0) return;
+  enemy.alive = false;
+  enemy.deathTimer = enemy.boss ? 90 : 28;
+  enemy.vx = 0;
+  enemy.vy = 0;
+  if (owner) owner.score += enemy.boss ? 800 : style === 'basic' ? 75 : 95;
+  if (enemy.boss) {
+    world.gateOpen = true;
+    stageStats.bossDefeated = true;
+    screenShake = 13;
+    hitStop = 10;
+    GameAudio.sfx('gate');
+    showMessage(`${CFG.stages[selectedStage].bossName} defeated. The exit gate is open!`);
+  }
+}
+
+function updateProjectiles(step) {
+  for (let index = world.projectiles.length - 1; index >= 0; index--) {
+    const projectile = world.projectiles[index];
+    projectile.life -= step;
+    projectile.x += projectile.vx * step;
+    projectile.y += projectile.vy * step;
+    let remove = projectile.life <= 0 || projectile.x < 0 || projectile.x > CFG.STAGE_WIDTH;
+    for (const solid of world.solids) {
+      if (!activeSolid(solid) || solid.kind === 'ground') continue;
+      if (circleRectOverlap(projectile.x, projectile.y, projectile.radius, solid)) { remove = true; break; }
+    }
+    if (!remove) {
+      for (const enemy of world.enemies) {
+        if (!enemy.alive || !circleRectOverlap(projectile.x, projectile.y, projectile.radius, enemy)) continue;
+        const owner = players[projectile.ownerId];
+        if (projectile.type === 'frost') {
+          enemy.frozenTimer = enemy.boss ? 75 : 220;
+          damageEnemy(enemy, 1, owner, 'frost');
+          if (enemy.alive) {
+            enemy.vx = 0;
+            enemy.vy = 0;
+          }
+        } else damageEnemy(enemy, 1, owner, 'blaster');
+        remove = true;
+        GameAudio.sfx('hit');
+        break;
+      }
+    }
+    if (remove) world.projectiles.splice(index, 1);
+  }
+
+  for (let index = world.enemyProjectiles.length - 1; index >= 0; index--) {
+    const projectile = world.enemyProjectiles[index];
+    projectile.life -= step;
+    projectile.x += projectile.vx * step;
+    projectile.y += projectile.vy * step;
+    let remove = projectile.life <= 0 || projectile.x < 0 || projectile.x > CFG.STAGE_WIDTH || projectile.y < 0 || projectile.y > H;
+    for (const solid of world.solids) {
+      if (!remove && activeSolid(solid) && circleRectOverlap(projectile.x, projectile.y, projectile.radius, solid)) {
+        remove = true;
+      }
+    }
+    for (const player of livingPlayers()) {
+      if (!remove && circleRectOverlap(projectile.x, projectile.y, projectile.radius, player)) {
+        damagePlayer(player, `was tagged by ${CFG.stages[selectedStage].bossName}`);
+        remove = true;
+      }
+    }
+    if (remove) world.enemyProjectiles.splice(index, 1);
+  }
+}
+
+function updateHazards(step) {
+  for (const hazard of world.hazards) {
+    const active = isHazardActive(hazard);
+    if (!active) continue;
+    for (const player of livingPlayers()) {
+      if (!rectsOverlap(player, hazard)) continue;
+      if (hazard.type === 'vent') {
+        player.vy = -16.8;
+        player.onGround = false;
+        spawnBurst(hazard.x + hazard.w / 2, GROUND - 5, '#ffd07a', 12, 4.8);
+      } else damagePlayer(player, `hit a ${hazardLabel(hazard.type)}`);
+    }
+  }
+}
+
+function isHazardActive(hazard) {
+  if (hazard.type !== 'laser') return true;
+  return (gameFrame + hazard.phase) % hazard.period < hazard.period * 0.54;
+}
+
+function hazardLabel(type) {
+  return ({ thorn: 'thorn patch', spike: 'vault spike', spore: 'shock spore', lava: 'molten channel', crystal: 'crystal fault', storm: 'storm coil', laser: 'pulse beam' })[type] || type;
+}
+
+function damagePlayer(player, reason, forceRespawn = false) {
+  if (!player.alive || player.invincibleTimer > 0) return;
+  if (player.powers.shield > 0) {
+    player.powers.shield = 0;
+    player.invincibleTimer = 80;
+    showMessage(`${player.name}'s shield absorbed the hit.`);
+    GameAudio.sfx('hit');
+    return;
+  }
+  player.lives--;
+  player.big = false;
+  player.invincibleTimer = 125;
+  player.hurtTimer = 55;
+  player.attackAnim = 0;
+  stageStats.damageTaken++;
+  screenShake = max(screenShake, 8);
+  spawnBurst(player.x + player.w / 2, player.y + player.h / 2, '#ff7790', 16, 5.2);
+  GameAudio.sfx('hurt');
+
+  if (player.lives <= 0) {
+    player.alive = false;
+    player.vx = 0;
+    player.vy = 0;
+    player.rescueTimer = gameMode === 'co-op' ? 240 : 0;
+    if (livingPlayers().length === 0) {
+      scene = 'gameover';
+      showMessage('The circuit went dark. Retry from the checkpoint.');
+    } else showMessage(`${player.name} is down. Survive until the rescue timer completes!`);
+    return;
+  }
+
+  if (forceRespawn || reason.includes('laser') || reason.includes('channel') || reason.includes('fault')) respawnPlayer(player);
+  else {
+    player.vx = -player.facing * 4.2;
+    player.vy = -8;
+  }
+  showMessage(`${player.name} ${reason}. ${player.lives} energy remaining.`);
+}
+
+function respawnPlayer(player) {
+  player.x = checkpointX + player.id * 46;
+  player.y = 300;
+  player.vx = 0;
+  player.vy = 0;
+  player.crouching = false;
+  player.invincibleTimer = max(player.invincibleTimer, 135);
+}
+
+function updateRescue(player, step) {
+  if (livingPlayers().length === 0) return;
+  player.rescueTimer -= step;
+  if (player.rescueTimer > 0) return;
+  const partner = livingPlayers()[0];
+  player.alive = true;
+  player.lives = 1;
+  player.big = false;
+  player.x = partner.x - partner.facing * 62;
+  player.y = max(150, partner.y - 70);
+  player.invincibleTimer = 180;
+  player.vx = partner.vx;
+  player.vy = -4;
+  showMessage(`${player.name} rejoined in a rescue bubble.`);
+  spawnBurst(player.x, player.y, '#dffcff', 18, 5);
+}
+
+function updateCoopLeash() {
+  if (gameMode !== 'co-op') return;
+  const living = livingPlayers().filter((player) => !player.finished);
+  if (living.length !== 2) return;
+  const [a, b] = living;
+  if (Math.abs(a.x - b.x) < 760) return;
+  const leader = a.x > b.x ? a : b;
+  const trailing = leader === a ? b : a;
+  trailing.x = leader.x - 180;
+  trailing.y = max(120, leader.y - 80);
+  trailing.vx = leader.vx;
+  trailing.vy = -4;
+  trailing.invincibleTimer = max(trailing.invincibleTimer, 150);
+  screenShake = max(screenShake, 3);
+  showMessage(`${trailing.name} was pulled back into co-op range.`);
+}
+
+function collectItems() {
+  world.coins.forEach((coin) => {
+    if (coin.collected) return;
+    for (const player of livingPlayers()) {
+      if (distanceSquared(player.x + player.w / 2, player.y + player.h / 2, coin.x, coin.y) < 31 * 31) {
+        coin.collected = true;
+        player.coins++;
+        player.score += 10;
+        spawnBurst(coin.x, coin.y, CFG.stages[selectedStage].palette.accent, 7, 2.8);
+        GameAudio.sfx('coin');
+        break;
+      }
+    }
+  });
+
+  world.shards.forEach((shard) => {
+    if (shard.collected) return;
+    for (const player of livingPlayers()) {
+      if (distanceSquared(player.x + player.w / 2, player.y + player.h / 2, shard.x, shard.y) < 36 * 36) {
+        shard.collected = true;
+        player.shards++;
+        player.score += 175;
+        spawnBurst(shard.x, shard.y, '#ffffff', 22, 5.2);
+        screenShake = max(screenShake, 3);
+        GameAudio.sfx('shard');
+        showMessage(`${player.name} found a hidden circuit shard (${collectedShardCount()}/3).`);
+        break;
+      }
+    }
+  });
+
+  world.powerUps.forEach((powerUp) => {
+    if (powerUp.collected) return;
+    for (const player of livingPlayers()) {
+      if (!rectsOverlap(player, powerUp)) continue;
+      powerUp.collected = true;
+      applyPowerUp(player, powerUp.type);
+      player.score += 80;
+      GameAudio.sfx('power');
+      spawnBurst(powerUp.x + 15, powerUp.y + 15, powerColor(powerUp.type), 18, 4.6);
+      break;
+    }
+  });
+}
+
+function applyPowerUp(player, type) {
+  if (type === 'shield') {
+    player.powers.shield = 60 * 10;
+    showMessage(`${player.name} activated a ten-second impact shield.`);
+  } else if (type === 'blaster') {
+    player.powers.blaster = 60 * 16;
+    player.shotMode = 'blaster';
+    showMessage(`${player.name} equipped Ember Bolts.`);
+  } else if (type === 'frost') {
+    player.powers.frost = 60 * 16;
+    player.shotMode = 'frost';
+    showMessage(`${player.name} equipped Frost Pulses.`);
+  } else if (type === 'prism') {
+    player.powers.prism = 60 * 14;
+    showMessage(`${player.name} drew the Prism Blade.`);
+  } else if (type === 'aspect') {
+    pendingChoice = { playerId: player.id, selected: selectedPath };
+    scene = 'choice';
+    GameInput.clear();
+    showMessage(`${player.name} found an Aspect Core. Choose Storm or Gale.`);
+  }
+}
+
+function chooseAspect(path) {
+  if (!pendingChoice) return;
+  const player = players[pendingChoice.playerId];
+  selectedPath = path;
+  player.powers.storm = path === 'storm' ? 60 * 15 : 0;
+  player.powers.gale = path === 'gale' ? 60 * 15 : 0;
+  if (path === 'gale') {
+    player.lives = min(player.maxLives + 1, player.lives + 1);
+    player.maxLives = max(player.maxLives, player.lives);
+  }
+  pendingChoice = null;
+  scene = 'playing';
+  GameInput.clear();
+  showMessage(path === 'storm' ? `${player.name} chose Storm: rapid chain lightning.` : `${player.name} chose Gale: wide knockback waves and bonus energy.`);
+}
+
+function powerColor(type) {
+  return ({ shield: '#7ce8ff', blaster: '#ff9a5c', frost: '#a9ecff', prism: '#75ffd5', aspect: '#d4b0ff' })[type] || '#ffffff';
+}
+
+function collectedShardCount() { return world.shards.filter((shard) => shard.collected).length; }
+
+function updateCheckpoint() {
+  if (world.checkpoint.reached) return;
+  if (!livingPlayers().some((player) => player.x + player.w > world.checkpoint.x)) return;
+  world.checkpoint.reached = true;
+  checkpointX = world.checkpoint.x + 48;
+  activePlayers().forEach((player) => { player.checkpointX = checkpointX; });
+  GameAudio.sfx('checkpoint');
+  showMessage('Checkpoint synchronized. Retries restart here.');
+}
+
+function updateFinish(step) {
+  if (!world.gateOpen) return;
+  activePlayers().forEach((player) => {
+    if (!player.alive || player.finished) return;
+    if (rectsOverlap(player, world.finish)) {
+      player.finished = true;
+      player.vx = 0;
+      player.vy = 0;
+      player.score += 300;
+      if (gameMode === 'co-op' && finishCountdown < 0) {
+        finishCountdown = 8 * 60;
+        showMessage(`${player.name} reached the relay. Partner has 8 seconds to join!`);
+      }
+    }
+  });
+
+  const allFinished = activePlayers().every((player) => player.finished);
+  if (allFinished) return completeStage();
+
+  if (gameMode === 'co-op' && finishCountdown >= 0) {
+    finishCountdown -= step;
+    if (finishCountdown <= 0) {
+      activePlayers().forEach((player) => { if (!player.finished) player.finished = true; });
+      stageStats.rescuedFinish = true;
+      completeStage();
+    }
+  }
+}
+
+function completeStage() {
+  if (scene === 'win') return;
+  scene = 'win';
+  finishCountdown = -1;
+  const shardCount = collectedShardCount();
+  const timeBonus = max(0, Math.floor((CFG.stages[selectedStage].parTime * 1.5 - runTime) * 12));
+  const score = Math.floor((runScore() + timeBonus + shardCount * 200) * CFG.difficulties[settings.difficulty].score);
+  const grade = calculateGrade(runTime, shardCount, stageStats);
+  result = { score, time: runTime, shards: shardCount, grade, newBest: false };
+  const stageId = CFG.stages[selectedStage].id;
+  const oldScore = progress.bestScores[stageId] || 0;
+  const oldTime = progress.bestTimes[stageId] || Infinity;
+  result.newBest = score > oldScore || runTime < oldTime;
+  progress.bestScores[stageId] = max(oldScore, score);
+  progress.bestTimes[stageId] = min(oldTime, runTime);
+  progress.bestGrades[stageId] = betterGrade(progress.bestGrades[stageId], grade);
+  progress.shards[stageId] = max(progress.shards[stageId] || 0, shardCount);
+  progress.unlockedStages = min(CFG.stages.length, max(progress.unlockedStages, selectedStage + 2));
+  progress.selectedStage = min(progress.unlockedStages - 1, selectedStage + 1);
+  progress.selectedCharacter = selectedCharacter;
+  progress.totalWins = (progress.totalWins || 0) + 1;
+  GameStorage.saveProgress(progress);
+  GameAudio.sfx('win');
+  screenShake = 10;
+  spawnBurst(world.finish.x, GROUND - 90, CFG.stages[selectedStage].palette.accent, 40, 7);
+  showMessage(`${CFG.stages[selectedStage].name} cleared with grade ${grade}!`);
+}
+
+function calculateGrade(time, shards, stats) {
+  const ratio = time / CFG.stages[selectedStage].parTime;
+  let points = ratio <= 1 ? 4 : ratio <= 1.18 ? 3 : ratio <= 1.45 ? 2 : 1;
+  if (shards === 3) points++;
+  if (stats.damageTaken === 0) points++;
+  if (stats.retries > 0 || stats.rescuedFinish) points--;
+  return points >= 6 ? 'S' : points >= 5 ? 'A' : points >= 3 ? 'B' : 'C';
+}
+
+function betterGrade(previous, next) {
+  const order = ['C', 'B', 'A', 'S'];
+  return order.indexOf(next) > order.indexOf(previous || 'C') ? next : previous || next;
+}
+
+function retryFromCheckpoint() {
+  const hadCheckpoint = world?.checkpoint?.reached;
+  world = GameLevels.createStage(selectedStage, settings.difficulty);
+  world.checkpoint.reached = Boolean(hadCheckpoint);
+  checkpointX = hadCheckpoint ? world.checkpoint.x + 48 : 120;
+  players = createPlayers(checkpointX);
+  cameraX = max(0, checkpointX - 220);
+  finishCountdown = -1;
+  pendingChoice = null;
+  stageStats.retries++;
+  runTime += hadCheckpoint ? 8 : 0;
+  scene = 'playing';
+  GameInput.clear();
+  showMessage(hadCheckpoint ? 'Checkpoint retry: eight-second grade penalty applied.' : 'Stage restarted from launch.');
+}
+
+function returnToMenu(nextStage = false) {
+  if (nextStage) selectedStage = min(progress.unlockedStages - 1, selectedStage + 1);
+  progress.selectedStage = selectedStage;
+  progress.selectedCharacter = selectedCharacter;
+  GameStorage.saveProgress(progress);
+  scene = 'menu';
+  result = null;
+  pendingChoice = null;
+  finishCountdown = -1;
+  GameInput.clear();
+  loadPreview();
+  showMessage('Choose the next circuit.');
+}
+
+function updateCamera(step) {
+  const targets = activePlayers().filter((player) => player.alive && !player.finished);
+  if (targets.length === 0) return;
+  const midpoint = targets.reduce((sum, player) => sum + player.x + player.w / 2, 0) / targets.length;
+  const target = constrain(midpoint - W * 0.42, 0, CFG.STAGE_WIDTH - W);
+  cameraX += (target - cameraX) * min(1, 0.085 * step);
+}
+
+function togglePause() {
+  if (scene === 'playing') {
+    scene = 'pause';
+    GameInput.clear();
+  } else if (scene === 'pause') {
+    scene = 'playing';
+    GameInput.clear();
+    showMessage('Back in the circuit.');
+  }
+}
+
+function showMessage(textValue) {
+  message = textValue;
+  messageTimer = 230;
+  const status = document.getElementById('game-status');
+  if (status) status.textContent = textValue;
+}
+
+function updateParticles(step) {
+  if (settings.reducedMotion) {
+    particles.length = 0;
+    return;
+  }
+  for (let index = particles.length - 1; index >= 0; index--) {
+    const particle = particles[index];
+    particle.life -= step;
+    particle.x += particle.vx * step;
+    particle.y += particle.vy * step;
+    particle.vy += particle.gravity * step;
+    particle.vx *= Math.pow(0.985, step);
+    if (particle.life <= 0) particles.splice(index, 1);
+  }
+}
+
+function spawnBurst(x, y, colour, count, speed) {
+  if (settings.reducedMotion) return;
+  for (let index = 0; index < count; index++) {
+    const angle = random(TWO_PI);
+    const velocity = random(speed * 0.35, speed);
+    particles.push({ x, y, vx: cos(angle) * velocity, vy: sin(angle) * velocity - 0.6, gravity: 0.08, life: random(18, 42), maxLife: 42, size: random(2, 6), colour });
+  }
+}
+
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function circleRectOverlap(cx, cy, radius, rectValue) {
+  const closestX = constrain(cx, rectValue.x, rectValue.x + rectValue.w);
+  const closestY = constrain(cy, rectValue.y, rectValue.y + rectValue.h);
+  return distanceSquared(cx, cy, closestX, closestY) <= radius * radius;
+}
+
+function distanceSquared(x1, y1, x2, y2) {
+  const dx = x1 - x2;
+  const dy = y1 - y2;
+  return dx * dx + dy * dy;
+}
+
+function drawGame() {
+  const theme = CFG.stages[selectedStage];
+  drawSky(theme);
+  drawBackdrop(theme);
+
+  const shakeAmount = settings.reducedMotion ? 0 : screenShake;
+  const shakeX = shakeAmount > 0 ? random(-shakeAmount, shakeAmount) : 0;
+  const shakeY = shakeAmount > 0 ? random(-shakeAmount * 0.45, shakeAmount * 0.45) : 0;
+
+  push();
+  translate(-cameraX + shakeX, shakeY);
+  drawWorld(theme);
+  pop();
+
+  if (scene === 'menu') drawMenu(theme);
+  else {
+    drawHUD(theme);
+    if (scene === 'pause') drawPauseOverlay();
+    else if (scene === 'choice') drawChoiceOverlay();
+    else if (scene === 'gameover') drawGameOverOverlay();
+    else if (scene === 'win') drawWinOverlay();
+  }
+}
+
+function drawSky(theme) {
+  noStroke();
+  const top = color(theme.palette.skyTop);
+  const bottom = color(theme.palette.skyBottom);
+  for (let y = 0; y < H; y += 7) {
+    fill(lerpColor(top, bottom, y / H));
+    rect(0, y, W, 8);
+  }
+  fill(color(theme.palette.sun));
+  circle(W - 112, selectedStage % 2 ? 108 : 84, selectedStage === 1 ? 64 : 82);
+  fill(255, 255, 255, 34);
+  circle(W - 112, selectedStage % 2 ? 108 : 84, selectedStage === 1 ? 88 : 112);
+
+  if (theme.weather === 'stars' || theme.weather === 'rain') {
+    stars.forEach((star) => {
+      const alpha = 120 + sin(frameCount * 0.025 + star.phase) * 80;
+      fill(255, 255, 255, alpha);
+      circle(star.x, star.y, star.s);
+    });
+  }
+}
+
+function drawBackdrop(theme) {
+  push();
+  noStroke();
+  const farOffset = -(cameraX * 0.11) % 520;
+  const nearOffset = -(cameraX * 0.22) % 310;
+  fill(color(theme.palette.far));
+
+  if (selectedStage === 0) {
+    for (let index = -1; index < 5; index++) ellipse(farOffset + index * 520, GROUND + 30, 620, 260);
+    fill(color(theme.palette.near));
+    for (let index = -1; index < 7; index++) ellipse(nearOffset + index * 310, GROUND + 48, 380, 155);
+  } else if (selectedStage === 1) {
+    for (let index = -1; index < 8; index++) {
+      const x = farOffset + index * 260;
+      rect(x, 230 + (index % 3) * 28, 88, 230);
+      rect(x - 24, 222 + (index % 3) * 28, 136, 16, 4);
+    }
+    fill(color(theme.palette.near));
+    for (let index = -1; index < 8; index++) rect(nearOffset + index * 230, 330 - (index % 2) * 45, 58, 155);
+  } else if (selectedStage === 2) {
+    for (let index = -1; index < 7; index++) {
+      const x = farOffset + index * 300;
+      rect(x, 180, 62, 310, 32);
+      ellipse(x + 30, 170, 250, 145);
+    }
+    fill(color(theme.palette.near));
+    for (let index = -1; index < 9; index++) ellipse(nearOffset + index * 220, 355, 280, 190);
+  } else if (selectedStage === 3) {
+    for (let index = -1; index < 7; index++) {
+      const x = farOffset + index * 320;
+      rect(x, 240, 190, 230);
+      rect(x + 28, 160, 44, 120);
+      rect(x + 115, 205, 34, 80);
+      fill(255, 180, 100, 35);
+      for (let windowIndex = 0; windowIndex < 4; windowIndex++) rect(x + 25 + windowIndex * 38, 286, 18, 48);
+      fill(color(theme.palette.far));
+    }
+    fill(color(theme.palette.near));
+    for (let index = -1; index < 9; index++) rect(nearOffset + index * 210, 350, 160, 120, 8);
+  } else if (selectedStage === 4) {
+    for (let index = -1; index < 8; index++) {
+      const x = farOffset + index * 260;
+      triangle(x, GROUND + 30, x + 110, 155 + (index % 3) * 35, x + 230, GROUND + 30);
+    }
+    fill(color(theme.palette.near));
+    for (let index = -1; index < 10; index++) {
+      const x = nearOffset + index * 190;
+      triangle(x, GROUND + 30, x + 75, 285 - (index % 2) * 42, x + 145, GROUND + 30);
+    }
+  } else {
+    for (let index = -1; index < 7; index++) {
+      const x = farOffset + index * 340;
+      rect(x, 210, 170, 260);
+      triangle(x - 20, 210, x + 85, 110, x + 190, 210);
+      rect(x + 58, 130, 54, 90);
+    }
+    fill(color(theme.palette.near));
+    for (let index = -1; index < 9; index++) rect(nearOffset + index * 220, 320, 175, 150, 14);
+  }
+
+  drawWeather(theme);
+  pop();
+}
+
+function drawWeather(theme) {
+  if (settings.reducedMotion) return;
+  noStroke();
+  motes.forEach((mote, index) => {
+    const x = (mote.x + frameCount * mote.speed + index * 13) % (W + 120) - 60;
+    const y = (mote.y + sin(frameCount * 0.018 + mote.phase) * 26 + H) % H;
+    if (theme.weather === 'rain') {
+      stroke(150, 220, 255, 95);
+      strokeWeight(1.5);
+      line(x, y, x - 7, y + 21);
+      noStroke();
+    } else if (theme.weather === 'embers') {
+      fill(255, 175, 80, 115);
+      circle(x, H - y, mote.s + 1);
+    } else if (theme.weather === 'spores') {
+      fill(210, 255, 155, 85);
+      circle(x, y, mote.s + 2);
+    } else if (theme.weather === 'petals') {
+      fill(255, 225, 238, 95);
+      ellipse(x, y, mote.s * 2.2, mote.s);
+    } else if (theme.weather === 'shards') {
+      fill(190, 240, 255, 70);
+      quad(x, y - mote.s, x + mote.s, y, x, y + mote.s, x - mote.s, y);
+    }
+  });
+}
+
+function drawWorld(theme) {
+  drawGround(theme);
+  drawSolids(theme);
+  drawHazards(theme);
+  drawCoins(theme);
+  drawShards(theme);
+  drawPowerUps();
+  drawCheckpoint(theme);
+  drawFinish(theme);
+  drawEnemies(theme);
+  drawProjectiles(theme);
+  drawPlayers();
+  drawParticles();
+}
+
+function drawGround(theme) {
+  noStroke();
+  fill(color(theme.palette.ground));
+  rect(0, GROUND, CFG.STAGE_WIDTH, H - GROUND);
+  fill(color(theme.palette.soil));
+  rect(0, GROUND + 16, CFG.STAGE_WIDTH, H - GROUND - 16);
+  fill(255, 255, 255, 26);
+  rect(0, GROUND, CFG.STAGE_WIDTH, 7);
+  for (let x = floor(cameraX / 48) * 48; x < cameraX + W + 100; x += 48) {
+    fill(255, 255, 255, 14);
+    rect(x, GROUND + 30, 25, 3, 2);
+  }
+}
+
+function drawSolids(theme) {
+  for (const solid of world.solids) {
+    if (!activeSolid(solid) || solid.kind === 'ground' || !worldRectVisible(solid)) continue;
+    if (solid.kind === 'gate') {
+      drawGate(solid, theme);
+      continue;
+    }
+    noStroke();
+    fill(color(theme.palette.platform));
+    rect(solid.x, solid.y, solid.w, solid.h, 7);
+    fill(255, 255, 255, solid.kind === 'ancient' ? 66 : 38);
+    rect(solid.x + 6, solid.y + 4, max(0, solid.w - 12), 4, 3);
+    fill(0, 0, 0, 22);
+    rect(solid.x + 9, solid.y + solid.h - 5, max(0, solid.w - 18), 4, 2);
+    if (solid.kind === 'ancient') {
+      stroke(color(theme.palette.accent));
+      strokeWeight(1.5);
+      for (let x = solid.x + 18; x < solid.x + solid.w - 8; x += 28) line(x, solid.y + 8, x + 7, solid.y + 13);
+      noStroke();
+    }
+  }
+}
+
+function drawGate(gate, theme) {
+  noStroke();
+  fill(8, 17, 31, 225);
+  rect(gate.x, gate.y, gate.w, gate.h, 8);
+  fill(color(theme.palette.hazard));
+  for (let y = gate.y + 12; y < gate.y + gate.h - 8; y += 28) rect(gate.x + 5, y, gate.w - 10, 11, 4);
+  fill(255, 255, 255, 170);
+  circle(gate.x + gate.w / 2, gate.y + 22, 7);
+}
+
+function drawHazards(theme) {
+  const hazardColour = settings.highContrast ? color('#ff1744') : color(theme.palette.hazard);
+  for (const hazard of world.hazards) {
+    if (!worldRectVisible(hazard, 80)) continue;
+    const active = isHazardActive(hazard);
+    if (hazard.type === 'laser') {
+      stroke(active ? hazardColour : color(130, 170, 190, 55));
+      strokeWeight(active ? (settings.highContrast ? 7 : 4) : 2);
+      line(hazard.x + hazard.w / 2, hazard.y, hazard.x + hazard.w / 2, hazard.y + hazard.h);
+      noStroke();
+      fill(active ? hazardColour : color(110, 130, 160));
+      rect(hazard.x - 7, hazard.y - 8, hazard.w + 14, 16, 5);
+      rect(hazard.x - 7, hazard.y + hazard.h - 8, hazard.w + 14, 16, 5);
+      continue;
+    }
+    if (hazard.type === 'vent') {
+      fill(45, 42, 48);
+      rect(hazard.x, GROUND - 12, hazard.w, 12, 4);
+      fill(255, 190, 92, 145 + sin(gameFrame * 0.1) * 70);
+      for (let x = hazard.x + 8; x < hazard.x + hazard.w; x += 18) triangle(x, GROUND - 12, x + 7, GROUND - 12, x + 3, GROUND - 48 - sin(gameFrame * 0.11 + x) * 12);
+      continue;
+    }
+    fill(hazardColour);
+    if (hazard.type === 'lava') {
+      rect(hazard.x, hazard.y, hazard.w, hazard.h, 7, 7, 0, 0);
+      fill(255, 220, 110, 130);
+      for (let x = hazard.x + 8; x < hazard.x + hazard.w; x += 20) circle(x, hazard.y + sin(gameFrame * 0.08 + x) * 3, 7);
+    } else {
+      const spikeCount = max(2, floor(hazard.w / 16));
+      for (let index = 0; index < spikeCount; index++) {
+        const x = hazard.x + index * (hazard.w / spikeCount);
+        triangle(x, hazard.y + hazard.h, x + hazard.w / spikeCount / 2, hazard.y, x + hazard.w / spikeCount, hazard.y + hazard.h);
+      }
+    }
+  }
+}
+
+function drawCoins(theme) {
+  for (const coin of world.coins) {
+    if (coin.collected || !worldCircleVisible(coin.x, coin.y, coin.radius)) continue;
+    const bob = settings.reducedMotion ? 0 : sin(gameFrame * 0.09 + coin.x * 0.02) * 3;
+    noStroke();
+    fill(0, 0, 0, 35);
+    ellipse(coin.x, coin.y + 15, 20, 6);
+    fill(color(theme.palette.accent));
+    circle(coin.x, coin.y + bob, coin.radius * 2);
+    fill(255, 255, 255, 125);
+    circle(coin.x - 3, coin.y - 3 + bob, 5);
+  }
+}
+
+function drawShards(theme) {
+  for (const shard of world.shards) {
+    if (shard.collected || !worldCircleVisible(shard.x, shard.y, shard.radius, 90)) continue;
+    const rotation = settings.reducedMotion ? 0.2 : gameFrame * 0.035 + shard.id;
+    push();
+    translate(shard.x, shard.y + sin(gameFrame * 0.08 + shard.id) * 5);
+    rotate(rotation);
+    noStroke();
+    fill(255, 255, 255, 42);
+    circle(0, 0, 36);
+    fill(color(theme.palette.accent));
+    quad(0, -15, 10, 0, 0, 15, -10, 0);
+    fill(255, 255, 255, 180);
+    triangle(0, -12, 6, 0, 0, 2);
+    pop();
+  }
+}
+
+function drawPowerUps() {
+  const labels = { shield: 'S', blaster: 'E', frost: 'F', prism: 'P', aspect: 'A' };
+  for (const powerUp of world.powerUps) {
+    if (powerUp.collected || !worldRectVisible(powerUp, 90)) continue;
+    const bob = settings.reducedMotion ? 0 : sin(gameFrame * 0.07 + powerUp.x) * 5;
+    noStroke();
+    fill(0, 0, 0, 35);
+    ellipse(powerUp.x + 15, powerUp.y + 34, 28, 7);
+    fill(color(powerColor(powerUp.type)));
+    rect(powerUp.x, powerUp.y + bob, powerUp.w, powerUp.h, 9);
+    fill(255);
+    textAlign(CENTER, CENTER);
+    textStyle(BOLD);
+    textSize(16);
+    text(labels[powerUp.type], powerUp.x + 15, powerUp.y + 15 + bob);
+    textStyle(NORMAL);
+  }
+}
+
+function drawCheckpoint(theme) {
+  const checkpoint = world.checkpoint;
+  if (!worldRectVisible(checkpoint, 100)) return;
+  stroke(checkpoint.reached ? color(theme.palette.accent) : color(170, 190, 210));
+  strokeWeight(4);
+  line(checkpoint.x, checkpoint.y, checkpoint.x, GROUND);
+  noStroke();
+  fill(checkpoint.reached ? color(theme.palette.accent) : color(80, 100, 120));
+  triangle(checkpoint.x, checkpoint.y, checkpoint.x + 45, checkpoint.y + 15, checkpoint.x, checkpoint.y + 30);
+  fill(255);
+  circle(checkpoint.x, checkpoint.y, 8);
+}
+
+function drawFinish(theme) {
+  const finish = world.finish;
+  if (!worldRectVisible(finish, 120)) return;
+  const gateGlow = world.gateOpen ? 180 + sin(gameFrame * 0.08) * 60 : 45;
+  noFill();
+  stroke(color(theme.palette.accent));
+  strokeWeight(world.gateOpen ? 6 : 2);
+  drawingContext.globalAlpha = gateGlow / 255;
+  ellipse(finish.x + 12, finish.y + 70, 66, 138);
+  drawingContext.globalAlpha = 1;
+  stroke(235);
+  strokeWeight(4);
+  line(finish.x + 12, finish.y, finish.x + 12, GROUND);
+  noStroke();
+  fill(world.gateOpen ? color(theme.palette.accent) : color(90));
+  triangle(finish.x + 13, finish.y + 8, finish.x + 72, finish.y + 28, finish.x + 13, finish.y + 48);
+}
+
+function drawEnemies(theme) {
+  for (const enemy of world.enemies) {
+    if (!enemy.alive && enemy.deathTimer <= 0) continue;
+    if (!worldRectVisible(enemy, 110)) continue;
+    push();
+    translate(enemy.x + enemy.w / 2, enemy.y + enemy.h / 2);
+    if (!enemy.alive) {
+      const scaleValue = max(0.05, enemy.deathTimer / (enemy.boss ? 90 : 28));
+      scale(1 + (1 - scaleValue) * 0.8, scaleValue);
+      drawingContext.globalAlpha = scaleValue;
+    }
+    noStroke();
+    if (enemy.frozenTimer > 0) fill('#a9ecff');
+    else if (enemy.boss) fill(color(theme.palette.hazard));
+    else if (enemy.kind === 'drone') fill('#ffe170');
+    else if (enemy.kind === 'hopper') fill('#ff86c8');
+    else fill('#a974e8');
+
+    if (enemy.boss) {
+      rectMode(CENTER);
+      rect(0, 0, enemy.w, enemy.h, 18);
+      fill(255, 255, 255, 28);
+      rect(0, -enemy.h * 0.25, enemy.w * 0.72, 12, 5);
+      fill(24, 22, 40);
+      circle(-16, -4, 11);
+      circle(16, -4, 11);
+      fill(color(theme.palette.accent));
+      circle(-16, -4, 4);
+      circle(16, -4, 4);
+      stroke(color(theme.palette.accent));
+      strokeWeight(4);
+      line(-30, -enemy.h / 2, -42, -enemy.h / 2 - 18);
+      line(30, -enemy.h / 2, 42, -enemy.h / 2 - 18);
+    } else if (enemy.kind === 'drone') {
+      ellipse(0, 0, enemy.w, enemy.h * 0.72);
+      fill(255, 255, 255, 65);
+      ellipse(0, -5, enemy.w * 0.6, 8);
+      fill(35);
+      circle(-9, 2, 6);
+      circle(9, 2, 6);
+      stroke(255, 255, 255, 90);
+      strokeWeight(3);
+      line(-enemy.w / 2, 0, -enemy.w / 2 - 10, sin(gameFrame * 0.25) * 7);
+      line(enemy.w / 2, 0, enemy.w / 2 + 10, -sin(gameFrame * 0.25) * 7);
+    } else if (enemy.kind === 'hopper') {
+      ellipse(0, 2, enemy.w, enemy.h);
+      fill(35);
+      circle(-8, -2, 5);
+      circle(8, -2, 5);
+      stroke(255, 255, 255, 85);
+      strokeWeight(3);
+      line(-10, enemy.h / 2 - 2, -16, enemy.h / 2 + 8);
+      line(10, enemy.h / 2 - 2, 16, enemy.h / 2 + 8);
+    } else {
+      rectMode(CENTER);
+      rect(0, 0, enemy.w, enemy.h, 10);
+      fill(35);
+      circle(-8, -5, 5);
+      circle(8, -5, 5);
+      rect(0, 8, 15, 4, 2);
+    }
+    drawingContext.globalAlpha = 1;
+    pop();
+
+    if (enemy.boss && enemy.alive) {
+      const barW = 86;
+      noStroke();
+      fill(0, 0, 0, 155);
+      rect(enemy.x - 4, enemy.y - 18, barW, 8, 4);
+      fill(color(theme.palette.hazard));
+      rect(enemy.x - 4, enemy.y - 18, barW * enemy.hp / enemy.maxHp, 8, 4);
+    }
+  }
+}
+
+function drawProjectiles(theme) {
+  noStroke();
+  world.projectiles.forEach((projectile) => {
+    fill(projectile.type === 'frost' ? '#b8f1ff' : '#ff9c5c');
+    circle(projectile.x, projectile.y, projectile.radius * 2);
+    fill(255, 255, 255, 135);
+    circle(projectile.x - projectile.vx * 0.35, projectile.y, projectile.radius);
+  });
+  world.enemyProjectiles.forEach((projectile) => {
+    fill(color(theme.palette.hazard));
+    circle(projectile.x, projectile.y, projectile.radius * 2);
+    noFill();
+    stroke(255, 255, 255, 115);
+    strokeWeight(2);
+    circle(projectile.x, projectile.y, projectile.radius * 2.8);
+    noStroke();
+  });
+}
+
+function drawPlayers() {
+  activePlayers().forEach((player) => {
+    if (!player.alive && gameMode !== 'co-op') return;
+    if (!player.alive) {
+      drawRescueBubble(player);
+      return;
+    }
+    if (player.invincibleTimer > 0 && floor(player.invincibleTimer / 5) % 2 === 0) return;
+    push();
+    translate(player.x + player.w / 2, player.y + player.h / 2);
+    const stretch = settings.reducedMotion ? 0 : constrain(-player.vy * 0.018, -0.16, 0.17);
+    scale(player.facing, 1);
+    scale(1 - stretch * 0.45, 1 + stretch);
+    if (player.powers.shield > 0) {
+      noFill();
+      stroke('#79e9ff');
+      strokeWeight(3);
+      ellipse(0, 0, player.w + 19, player.h + 19);
+    }
+    if (player.powers.storm > 0) {
+      stroke('#8feaff');
+      strokeWeight(2);
+      line(-10, -player.h / 2, -18, -player.h / 2 - 10);
+      line(10, -player.h / 2, 18, -player.h / 2 - 12);
+    }
+    if (player.powers.gale > 0) {
+      noFill();
+      stroke(225, 255, 255, 130);
+      strokeWeight(2);
+      arc(0, 0, player.w + 26, player.h + 18, -HALF_PI, HALF_PI);
+    }
+    rectMode(CENTER);
+    noStroke();
+    fill(color(player.bodyColor));
+    rect(0, 0, player.w, player.h, 9);
+    fill(255, 255, 255, 28);
+    rect(0, -player.h * 0.28, player.w * 0.72, 8, 4);
+    fill(color(player.detailColor));
+    rect(0, -2, player.w * 0.58, player.h * 0.31, 4);
+    fill(22, 30, 40);
+    circle(8, -4, 5);
+    fill('#202838');
+    rect(-8, player.h / 2 - 1, 9, 8, 3);
+    rect(8, player.h / 2 - 1, 9, 8, 3);
+
+    if (player.attackAnim > 0) {
+      noFill();
+      stroke(player.powers.prism > 0 ? '#77ffd8' : color(player.trailColor));
+      strokeWeight(player.powers.prism > 0 ? 7 : 4);
+      const size = player.powers.prism > 0 ? 122 : 66;
+      arc(player.w * 0.7, 0, size, size, -PI * 0.46, PI * 0.48);
+    }
+    pop();
+
+    if (Math.abs(player.vx) > 2.8 && player.onGround && !settings.reducedMotion && frameCount % 5 === 0) {
+      spawnBurst(player.x + player.w / 2 - player.facing * 12, player.y + player.h - 2, player.trailColor, 1, 1.5);
+    }
+  });
+}
+
+function drawRescueBubble(player) {
+  const partner = livingPlayers()[0];
+  if (!partner) return;
+  const progressValue = constrain(1 - player.rescueTimer / 240, 0, 1);
+  const x = partner.x + (player.id === 0 ? -72 : 72);
+  const y = max(90, partner.y - 70 + sin(gameFrame * 0.06) * 8);
+  noFill();
+  stroke('#dffcff');
+  strokeWeight(3);
+  circle(x, y, 44);
+  arc(x, y, 54, 54, -HALF_PI, -HALF_PI + TWO_PI * progressValue);
+  noStroke();
+  fill(255);
+  textAlign(CENTER, CENTER);
+  textSize(13);
+  text(player.name, x, y);
+}
+
+function drawParticles() {
+  noStroke();
+  particles.forEach((particle) => {
+    const alpha = constrain(particle.life / particle.maxLife, 0, 1) * 230;
+    const particleColour = color(particle.colour);
+    particleColour.setAlpha(alpha);
+    fill(particleColour);
+    circle(particle.x, particle.y, particle.size);
+  });
+}
+
+function drawHUD(theme) {
+  const active = activePlayers();
+  if (gameMode === 'co-op') {
+    drawPlayerPanel(active[0], 14, 12, 248, theme);
+    drawPlayerPanel(active[1], 270, 12, 248, theme);
+  } else drawPlayerPanel(active[0], 14, 12, 292, theme);
+
+  drawPanel(W - 350, 12, 336, 105, 14, color(6, 16, 30, 210));
+  fill(255);
+  textAlign(LEFT, TOP);
+  textSize(16);
+  text(`${selectedStage + 1}. ${theme.shortName}`, W - 334, 25);
+  fill(color(theme.palette.accent));
+  text(`Time ${formatTime(runTime)}  ·  Par ${formatTime(theme.parTime)}`, W - 334, 49);
+  fill(220, 232, 244);
+  text(`Shards ${collectedShardCount()}/3  ·  Score ${runScore()}`, W - 334, 73);
+  fill(world.gateOpen ? color(theme.palette.accent) : color(theme.palette.hazard));
+  text(world.gateOpen ? 'EXIT OPEN' : `Boss: ${theme.bossName}`, W - 334, 95);
+
+  const boss = world.enemies.find((enemy) => enemy.boss && enemy.alive);
+  if (boss && boss.x < cameraX + W + 250 && boss.x > cameraX - 250) drawBossBar(boss, theme);
+
+  if (messageTimer > 0 && message) {
+    const alpha = min(1, messageTimer / 35);
+    const panelW = min(740, max(320, textWidth(message) + 44));
+    drawPanel(W / 2 - panelW / 2, 128, panelW, 42, 12, color(5, 14, 28, 180 * alpha));
+    fill(255, 255, 255, 240 * alpha);
+    textAlign(CENTER, CENTER);
+    textSize(15);
+    text(message, W / 2, 149);
+  }
+
+  if (gameMode === 'co-op' && finishCountdown > 0) {
+    fill(color(theme.palette.accent));
+    textAlign(CENTER, CENTER);
+    textSize(22);
+    text(`PARTNER RELAY: ${ceil(finishCountdown / 60)}s`, W / 2, 193);
+  }
+}
+
+function drawPlayerPanel(player, x, y, panelW, theme) {
+  drawPanel(x, y, panelW, 105, 14, color(6, 16, 30, 210));
+  fill(255);
+  textAlign(LEFT, TOP);
+  textSize(17);
+  text(`${player.name}${player.alive ? '' : ' · RESCUE'}`, x + 14, y + 12);
+  fill(color(player.bodyColor));
+  rect(x + 14, y + 36, panelW - 28, 4, 3);
+  for (let index = 0; index < player.maxLives; index++) {
+    fill(index < player.lives ? color(theme.palette.hazard) : color(65, 78, 94));
+    circle(x + 20 + index * 20, y + 56, 11);
+  }
+  fill(225, 235, 245);
+  textSize(14);
+  text(`Coins ${player.coins}  ·  Score ${player.score}`, x + 14, y + 72);
+  const power = currentPowerLabel(player);
+  fill(power === 'Basic pulse' ? color(190, 205, 220) : color(theme.palette.accent));
+  text(power, x + 14, y + 91);
+}
+
+function currentPowerLabel(player) {
+  if (player.powers.storm > 0) return `Storm ${ceil(player.powers.storm / 60)}s`;
+  if (player.powers.gale > 0) return `Gale ${ceil(player.powers.gale / 60)}s`;
+  if (player.powers.prism > 0) return `Prism Blade ${ceil(player.powers.prism / 60)}s`;
+  if (player.shotMode === 'frost' && player.powers.frost > 0) return `Frost Pulse ${ceil(player.powers.frost / 60)}s`;
+  if (player.powers.blaster > 0) return `Ember Bolt ${ceil(player.powers.blaster / 60)}s`;
+  if (player.powers.frost > 0) return `Frost Pulse ${ceil(player.powers.frost / 60)}s`;
+  return 'Basic pulse';
+}
+
+function drawBossBar(boss, theme) {
+  const barW = 430;
+  drawPanel(W / 2 - barW / 2, H - 42, barW, 27, 10, color(7, 12, 24, 220));
+  noStroke();
+  fill(color(theme.palette.hazard));
+  rect(W / 2 - barW / 2 + 8, H - 34, (barW - 16) * boss.hp / boss.maxHp, 11, 5);
+  fill(255);
+  textAlign(CENTER, CENTER);
+  textSize(12);
+  text(theme.bossName, W / 2, H - 28);
+}
+
+function buildMenuButtons() {
+  menuButtons = [
+    { action: 'prevStage', x: 82, y: 176, w: 58, h: 58, label: '‹' },
+    { action: 'nextStage', x: W - 140, y: 176, w: 58, h: 58, label: '›' },
+    { action: 'single', x: 190, y: 338, w: 250, h: 50, label: 'SINGLE PLAYER' },
+    { action: 'co-op', x: 520, y: 338, w: 250, h: 50, label: 'LOCAL CO-OP' },
+    { action: 'character', x: 190, y: 405, w: 250, h: 55, label: '' },
+    { action: 'start', x: 520, y: 405, w: 250, h: 55, label: 'LAUNCH' }
+  ];
+}
+
+function buildChoiceButtons() {
+  choiceButtons = [
+    { action: 'storm', x: 190, y: 310, w: 250, h: 92, label: 'STORM' },
+    { action: 'gale', x: 520, y: 310, w: 250, h: 92, label: 'GALE' }
   ];
 }
 
 function buildPauseButtons() {
   pauseButtons = [
-    { action: 'resume', x: width / 2 - 300, y: height / 2 + 38, w: 180, h: 54, label: 'Resume' },
-    { action: 'restart', x: width / 2 - 90, y: height / 2 + 38, w: 180, h: 54, label: 'Restart level' },
-    { action: 'menu', x: width / 2 + 120, y: height / 2 + 38, w: 180, h: 54, label: 'Main Menu' }
+    { action: 'resume', x: 160, y: 330, w: 190, h: 56, label: 'RESUME' },
+    { action: 'retry', x: 385, y: 330, w: 190, h: 56, label: 'RETRY' },
+    { action: 'menu', x: 610, y: 330, w: 190, h: 56, label: 'STAGE MENU' }
   ];
 }
 
-function buildForceChoiceButtons() {
-  forceChoiceButtons = [
-    { side: 'dark', x: width / 2 - 250, y: height / 2 + 18, w: 210, h: 68, label: 'Dark Side' },
-    { side: 'light', x: width / 2 + 40, y: height / 2 + 18, w: 210, h: 68, label: 'Light Side' }
-  ];
-}
+function drawMenu(theme) {
+  fill(3, 9, 18, 118);
+  rect(0, 0, W, H);
+  drawPanel(48, 26, W - 96, H - 52, 24, color(5, 15, 29, 222));
 
-function buildBackground() {
-  stars = [];
-  clouds = [];
-  hills = [];
-  for (let i = 0; i < 130; i++) stars.push({ x: random(worldWidth), y: random(220), s: random(1, 3) });
-  for (let i = 0; i < 36; i++) clouds.push({ x: random(worldWidth), y: random(35, 180), w: random(100, 190), h: random(28, 62) });
-  for (let i = 0; i < 60; i++) hills.push({ x: i * 420 + random(-90, 90), w: random(250, 420), h: random(80, 180) });
-}
+  fill(color(theme.palette.accent));
+  textAlign(CENTER, TOP);
+  textStyle(BOLD);
+  textSize(38);
+  text('SKYBOUND CIRCUIT DX', W / 2, 48);
+  textStyle(NORMAL);
+  fill(190, 211, 229);
+  textSize(14);
+  text('Six worlds · four pilots · one last relay', W / 2, 94);
 
-function buildLevel() {
-  solids = [];
-  enemies = [];
-  coins = [];
-  powerUps = [];
-  projectiles = [];
-  solids.push({ x: 0, y: groundY, w: worldWidth, h: height - groundY, style: 'ground' });
-  buildMeadowSection(0);
-  buildRuinsSection(3800);
-  buildCanopySection(7700);
-  buildFactorySection(11600);
-  buildCanyonSection(15600);
-  buildFinalGauntletSection(19700);
-  finishFlag = { x: worldWidth - 220, y: 250, w: 28, h: 190 };
-}
-
-function buildMeadowSection(base) {
-  addStairRun(base + 320, 5, 80, 26, 18, 'platform');
-  addObstacle(base + 1080, 70, 54);
-  addObstacle(base + 1430, 84, 78);
-  addTunnel(base + 1880, 420, 386);
-  addPlatform(base + 2600, 350, 150, 22);
-  addPlatform(base + 2825, 320, 120, 22);
-  addPlatform(base + 3040, 286, 120, 22);
-  addPlatform(base + 3260, 320, 160, 22);
-  addEnemy('walker', base + 620, groundY - 36, base + 470, base + 930);
-  addEnemy('hopper', base + 1220, groundY - 30, base + 1080, base + 1600);
-  addEnemy('drone', base + 2130, 300, base + 1900, base + 2350);
-  addEnemy('walker', base + 3300, groundY - 36, base + 3200, base + 3560);
-  addCoinRow(base + 240, 380, 5, 40);
-  addCoinArc(base + 740, 300, 6, 40, 18);
-  addCoinRow(base + 1930, 352, 7, 42);
-  addCoinArc(base + 2840, 255, 6, 42, 18);
-  addPowerUp(base + 2300, 398, 'shield');
-}
-
-function buildRuinsSection(base) {
-  addLowBeamRun(base + 180, 3, 360, 388);
-  addObstacle(base + 320, 70, 60);
-  addObstacle(base + 760, 112, 76);
-  addObstacle(base + 1340, 80, 82);
-  addPlatform(base + 1180, 340, 110, 22);
-  addPlatform(base + 1440, 306, 120, 22);
-  addPlatform(base + 1700, 274, 130, 22);
-  addPlatform(base + 1960, 312, 140, 22);
-  addTunnel(base + 2340, 520, 394);
-  addPlatform(base + 3060, 310, 120, 22);
-  addPlatform(base + 3320, 274, 120, 22);
-  addEnemy('walker', base + 500, groundY - 36, base + 240, base + 900);
-  addEnemy('hopper', base + 1110, groundY - 30, base + 940, base + 1450);
-  addEnemy('drone', base + 1770, 250, base + 1600, base + 2100);
-  addEnemy('hopper', base + 2600, groundY - 30, base + 2380, base + 2880);
-  addEnemy('walker', base + 3370, groundY - 36, base + 3100, base + 3570);
-  addCoinRow(base + 220, 355, 4, 42);
-  addCoinRow(base + 1180, 300, 4, 42);
-  addCoinArc(base + 1990, 285, 5, 42, 20);
-  addCoinRow(base + 2440, 360, 7, 42);
-  addCoinArc(base + 3170, 255, 5, 42, 18);
-  addPowerUp(base + 3460, 398, 'force');
-}
-
-function buildCanopySection(base) {
-  addPlatform(base + 220, 362, 150, 22);
-  addPlatform(base + 430, 332, 140, 22);
-  addPlatform(base + 640, 304, 130, 22);
-  addPlatform(base + 850, 278, 120, 22);
-  addPlatform(base + 1040, 252, 120, 22);
-  addPlatform(base + 1260, 276, 140, 22);
-  addPlatform(base + 1490, 308, 130, 22);
-  addObstacle(base + 1760, 74, 68);
-  addTunnel(base + 2080, 460, 390);
-  addPlatform(base + 2720, 334, 160, 22);
-  addStairRun(base + 2990, 5, 82, 24, 20, 'platform');
-  addPlatform(base + 3550, 258, 190, 22);
-  addEnemy('hopper', base + 340, groundY - 30, base + 180, base + 660);
-  addEnemy('drone', base + 930, 205, base + 760, base + 1290);
-  addEnemy('walker', base + 1870, groundY - 36, base + 1740, base + 2010);
-  addEnemy('drone', base + 2270, 280, base + 2100, base + 2510);
-  addEnemy('hopper', base + 3120, groundY - 30, base + 2920, base + 3420);
-  addEnemy('walker', base + 3610, groundY - 36, base + 3480, base + 3770);
-  addCoinArc(base + 260, 330, 4, 40, 18);
-  addCoinArc(base + 760, 220, 6, 40, 18);
-  addCoinRow(base + 2110, 352, 6, 42);
-  addCoinArc(base + 3080, 245, 5, 42, 18);
-  addCoinRow(base + 3590, 235, 4, 42);
-  addPowerUp(base + 1210, 180, 'fire');
-}
-
-function buildFactorySection(base) {
-  addLowBeamRun(base + 260, 2, 430, 392);
-  addObstacle(base + 360, 82, 70);
-  addObstacle(base + 980, 70, 82);
-  addObstacle(base + 1480, 98, 82);
-  addTunnel(base + 1860, 540, 384);
-  addPlatform(base + 2560, 350, 130, 22);
-  addPlatform(base + 2800, 315, 130, 22);
-  addPlatform(base + 3040, 282, 130, 22);
-  addObstacle(base + 3450, 76, 74);
-  addTunnel(base + 3740, 420, 392);
-  addEnemy('walker', base + 610, groundY - 36, base + 380, base + 910);
-  addEnemy('drone', base + 1230, 270, base + 1040, base + 1460);
-  addEnemy('hopper', base + 1690, groundY - 30, base + 1530, base + 1810);
-  addEnemy('walker', base + 2220, groundY - 36, base + 1900, base + 2380);
-  addEnemy('drone', base + 3240, 225, base + 3090, base + 3380);
-  addEnemy('hopper', base + 3910, groundY - 30, base + 3780, base + 4120);
-  addCoinRow(base + 300, 355, 5, 42);
-  addCoinArc(base + 1170, 240, 4, 44, 18);
-  addCoinRow(base + 1930, 350, 9, 42);
-  addCoinArc(base + 2590, 250, 6, 42, 18);
-  addCoinRow(base + 3760, 355, 5, 42);
-  addPowerUp(base + 3380, 398, 'saber');
-}
-function buildCanyonSection(base) {
-  addPlatform(base + 240, 362, 130, 22);
-  addPlatform(base + 470, 334, 120, 22);
-  addPlatform(base + 680, 306, 110, 22);
-  addPlatform(base + 890, 278, 110, 22);
-  addPlatform(base + 1110, 308, 120, 22);
-  addObstacle(base + 1370, 96, 78);
-  addTunnel(base + 1760, 460, 386);
-  addStairRun(base + 2440, 6, 76, 22, 22, 'platform');
-  addObstacle(base + 3250, 84, 76);
-  addLowBeamRun(base + 3440, 2, 320, 390);
-  addPlatform(base + 3670, 286, 130, 22);
-  addPlatform(base + 3850, 250, 140, 22);
-  addEnemy('drone', base + 390, 260, base + 240, base + 620);
-  addEnemy('hopper', base + 1160, groundY - 30, base + 1000, base + 1320);
-  addEnemy('walker', base + 1550, groundY - 36, base + 1410, base + 1670);
-  addEnemy('drone', base + 2190, 310, base + 1800, base + 2260);
-  addEnemy('hopper', base + 2920, groundY - 30, base + 2520, base + 3140);
-  addEnemy('walker', base + 3820, groundY - 36, base + 3760, base + 3990);
-  addCoinArc(base + 270, 300, 5, 42, 18);
-  addCoinArc(base + 790, 250, 4, 40, 16);
-  addCoinRow(base + 1800, 352, 7, 42);
-  addCoinArc(base + 2540, 255, 7, 40, 16);
-  addCoinRow(base + 3470, 352, 5, 42);
-  addPowerUp(base + 2060, 398, 'force');
-}
-
-function buildFinalGauntletSection(base) {
-  addLowBeamRun(base + 180, 1, 280, 392);
-  addObstacle(base + 420, 84, 74);
-  addPlatform(base + 760, 334, 150, 22);
-  addPlatform(base + 990, 302, 130, 22);
-  addPlatform(base + 1190, 274, 120, 22);
-  addTunnel(base + 1380, 420, 388);
-  addObstacle(base + 2080, 90, 78);
-  addPlatform(base + 2360, 334, 130, 22);
-  addPlatform(base + 2580, 302, 120, 22);
-  addPlatform(base + 2790, 270, 120, 22);
-  addPlatform(base + 2990, 240, 120, 22);
-  addTunnel(base + 3200, 520, 392);
-  addObstacle(base + 3960, 78, 72);
-  addEnemy('walker', base + 640, groundY - 36, base + 460, base + 940);
-  addEnemy('drone', base + 1160, 240, base + 1060, base + 1320);
-  addEnemy('hopper', base + 1700, groundY - 30, base + 1460, base + 1800);
-  addEnemy('walker', base + 2290, groundY - 36, base + 2140, base + 2520);
-  addEnemy('drone', base + 2940, 180, base + 2800, base + 3020);
-  addEnemy('hopper', base + 3510, groundY - 30, base + 3270, base + 3700);
-  addEnemy('walker', base + 4120, groundY - 36, base + 3980, base + 4200);
-  addCoinRow(base + 220, 355, 4, 42);
-  addCoinArc(base + 820, 250, 5, 42, 18);
-  addCoinRow(base + 1420, 350, 6, 42);
-  addCoinArc(base + 2420, 238, 6, 42, 18);
-  addCoinRow(base + 3220, 352, 7, 42);
-  addCoinArc(base + 4040, 255, 5, 42, 18);
-  addPowerUp(base + 2680, 398, 'ice');
-  addPowerUp(base + 3620, 398, 'saber');
-}
-
-function addObstacle(x, w, h) {
-  h = min(h, 84);
-  solids.push({ x, y: groundY - h, w, h, style: 'block' });
-}
-
-function addPlatform(x, y, w, h) { solids.push({ x, y, w, h, style: 'platform' }); }
-
-function addTunnel(x, w, roofY) {
-  solids.push({ x, y: roofY, w, h: 24, style: 'roof' });
-  coins.push({ x: x + w * 0.5, y: roofY - 28, r: 11, collected: false });
-}
-
-function addLowBeamRun(startX, count, beamW, roofY) {
-  for (let i = 0; i < count; i++) addTunnel(startX + i * (beamW + 110), beamW, roofY);
-}
-
-function addStairRun(startX, steps, gap, w, rise, style) {
-  for (let i = 0; i < steps; i++) solids.push({ x: startX + i * gap, y: groundY - 34 - i * rise, w, h: 18, style: style || 'platform' });
-}
-
-function addEnemy(kind, x, y, left, right) {
-  enemies.push({
-    id: enemies.length, kind, x, y, w: kind === 'drone' ? 42 : 36, h: kind === 'hopper' ? 30 : 36,
-    vx: kind === 'hopper' ? 1.7 : kind === 'drone' ? 2.0 : 1.35, vy: 0, onGround: false,
-    left, right, alive: true, baseY: y, phase: random(TWO_PI), hopTimer: int(random(28, 90)),
-    frozenTimer: 0, shockedTimer: 0, shockOwnerId: -1, stunnedTimer: 0, pushOwnerId: -1, deadTimer: 0, deathStyle: '', deathAnim: 0, deathFacing: 1
-  });
-}
-
-function addCoinRow(startX, y, count, gap) { for (let i = 0; i < count; i++) coins.push({ x: startX + i * gap, y, r: 11, collected: false }); }
-
-function addCoinArc(startX, y, count, gap, lift) {
-  for (let i = 0; i < count; i++) {
-    let middle = (count - 1) * 0.5;
-    let curve = abs(i - middle) * lift;
-    coins.push({ x: startX + i * gap, y: y - (lift * 1.6 - curve), r: 11, collected: false });
-  }
-}
-
-function addPowerUp(x, y, type) { powerUps.push({ x, y, w: 30, h: 30, type, collected: false }); }
-
-function updateGame() {
-  gameTicks++;
-  if (levelMessageTimer > 0) levelMessageTimer--;
-  for (let p of activePlayers()) updatePlayerTimers(p);
-  handleInputs();
-  for (let p of activePlayers()) if (p.jumpBufferTimer > 0) tryJump(p);
-  for (let p of activePlayers()) updatePlayer(p);
-  updatePlayerInteractions();
-  updateEnemies();
-  updateForcePowers();
-  updateProjectiles();
-  collectCoins();
-  collectPowerUps();
-  updateCheckpoint();
-  updateFinish();
-  updateMusic();
-}
-
-function updatePlayerTimers(p) {
-  if (p.hurtTimer > 0) p.hurtTimer--;
-  if (p.invincibleTimer > 0) p.invincibleTimer--;
-  if (p.fireTimer > 0) p.fireTimer--;
-  if (p.iceTimer > 0) p.iceTimer--;
-  if (p.darkTimer > 0) { p.darkTimer--; if (p.darkTimer % 38 === 0) playSfx('lightningHum'); }
-  if (p.lightTimer > 0) p.lightTimer--;
-  if (p.saberTimer > 0) { p.saberTimer--; if (p.saberTimer % 42 === 0) playSfx('saberHum'); if (p.saberTimer === 1) playSfx('saberOff'); }
-  if (p.shieldTimer > 0) p.shieldTimer--;
-  if (p.shotCooldown > 0) p.shotCooldown--;
-  if (p.saberCooldown > 0) p.saberCooldown--;
-  if (p.saberSwingTimer > 0) p.saberSwingTimer--;
-  if (p.jumpBufferTimer > 0) p.jumpBufferTimer--;
-  if (p.coyoteTimer > 0) p.coyoteTimer--;
-}
-
-function installInputHandlers() {
-  const preventCodes = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'Slash', 'KeyA', 'KeyD', 'KeyS', 'KeyW']);
-  window.addEventListener('keydown', (event) => {
-    pressedCodes.add(event.code);
-    if (preventCodes.has(event.code)) event.preventDefault();
-  }, { passive: false });
-  window.addEventListener('keyup', (event) => {
-    pressedCodes.delete(event.code);
-    if (preventCodes.has(event.code)) event.preventDefault();
-  }, { passive: false });
-  window.addEventListener('blur', clearPressedCodes);
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) clearPressedCodes();
-  });
-}
-
-function clearPressedCodes() {
-  pressedCodes.clear();
-  for (let p of players) {
-    if (!p) continue;
-    p.downHeld = false;
-    p.attackHeld = false;
-    p.forceFiring = false;
-    p.jumpHeldPrev = false;
-    p.attackHeldPrev = false;
-  }
-}
-
-function isControlDown(code) {
-  return pressedCodes.has(code);
-}
-
-function handleInputs() {
-  for (let p of activePlayers()) {
-    if (!p.alive || p.finished) continue;
-    let move = 0;
-    let leftDown = isControlDown(p.controls.left);
-    let rightDown = isControlDown(p.controls.right);
-    let jumpDown = isControlDown(p.controls.jump);
-    let attackDown = isControlDown(p.controls.attack);
-    if (leftDown) move -= 1;
-    if (rightDown) move += 1;
-    p.downHeld = isControlDown(p.controls.down);
-    p.attackHeld = attackDown;
-    p.forceFiring = (p.darkTimer > 0 || p.lightTimer > 0) && attackDown;
-
-    if (jumpDown && !p.jumpHeldPrev) queueJumpForPlayer(p);
-    if (attackDown && !p.attackHeldPrev && !(p.darkTimer > 0 || p.lightTimer > 0)) tryAttack(p);
-
-    updatePlayerSize(p);
-    let maxSpeed = p.crouching ? 2.2 : 4.8;
-    if (!p.big) maxSpeed += 0.4;
-    let accel = p.onGround ? 0.32 : 0.18;
-    let target = move * maxSpeed;
-    p.vx = lerp(p.vx, target, accel);
-    if (abs(p.vx) < 0.05) p.vx = 0;
-    if (move !== 0) p.facing = move;
-
-    p.jumpHeldPrev = jumpDown;
-    p.attackHeldPrev = attackDown;
-  }
-}
-
-function updatePlayerSize(p) {
-  let targetW = p.big ? 34 : 18;
-  let standH = p.big ? 46 : 23;
-  let crouchH = p.big ? 24 : 14;
-  p.w = targetW;
-  let wantsCrouch = p.downHeld && (p.onGround || p.crouching);
-  let targetH = wantsCrouch ? crouchH : standH;
-  if (targetH < p.h) {
-    let footY = p.y + p.h;
-    p.h = targetH;
-    p.y = footY - p.h;
-    p.crouching = true;
-  } else if (targetH > p.h) {
-    let next = { x: p.x, y: p.y - (targetH - p.h), w: p.w, h: targetH };
-    if (!solidOverlap(next)) {
-      p.y -= (targetH - p.h);
-      p.h = targetH;
-      p.crouching = false;
-    } else {
-      let footY = p.y + p.h;
-      p.h = crouchH;
-      p.y = footY - p.h;
-      p.crouching = true;
-    }
-  } else {
-    p.crouching = targetH === crouchH;
-  }
-}
-
-function updatePlayer(p) {
-  if (!p.alive || p.finished) return;
-  p.prevY = p.y;
-  if (p.onGround) p.coyoteTimer = 8;
-  p.x += p.vx;
-  collidePlayerSolids(p, 'x');
-  if (!p.onGround || p.vy < 0) p.vy += gravity;
-  p.vy = min(p.vy, 16);
-  p.y += p.vy;
-  p.onGround = false;
-  collidePlayerSolids(p, 'y');
-  if (p.onGround) p.coyoteTimer = 8;
-  p.x = constrain(p.x, 0, worldWidth - p.w);
-  if (p.y > height + 220) loseLife(p, `${p.name} fell!`, true);
-}
-
-function collidePlayerSolids(p, axis) {
-  for (let s of solids) {
-    if (!rectsOverlap(p, s)) continue;
-    if (axis === 'x') {
-      if (p.vx > 0) p.x = s.x - p.w;
-      if (p.vx < 0) p.x = s.x + s.w;
-      p.vx = 0;
-    } else {
-      if (p.vy > 0) { p.y = s.y - p.h; p.vy = 0; p.onGround = true; }
-      else if (p.vy < 0) { p.y = s.y + s.h; p.vy = 0; }
-    }
-  }
-}
-
-function updatePlayerInteractions() {
-  let a = players[0], b = players[1];
-  if (!a || !b || !a.active || !b.active || !a.alive || !b.alive || a.finished || b.finished) return;
-  if (!rectsOverlap(a, b)) return;
-  let aPrevBottom = a.prevY + a.h, bPrevBottom = b.prevY + b.h;
-  let aBottom = a.y + a.h, bBottom = b.y + b.h;
-  let aStomped = a.vy >= -0.5 && aPrevBottom <= b.y + 14 && aBottom >= b.y;
-  let bStomped = b.vy >= -0.5 && bPrevBottom <= a.y + 14 && bBottom >= a.y;
-  if (aStomped && !bStomped) {
-    a.y = b.y - a.h; a.vy = -10.5; a.onGround = false; b.vy = max(b.vy, 1.5); playSfx('boing'); showMessage('P1 bounced off P2!'); return;
-  }
-  if (bStomped && !aStomped) {
-    b.y = a.y - b.h; b.vy = -10.5; b.onGround = false; a.vy = max(a.vy, 1.5); playSfx('boing'); showMessage('P2 bounced off P1!'); return;
-  }
-  let overlapX = min(a.x + a.w, b.x + b.w) - max(a.x, b.x);
-  if (overlapX > 0) {
-    let push = overlapX * 0.5 + 0.5;
-    if (a.x < b.x) { a.x -= push; b.x += push; } else { a.x += push; b.x -= push; }
-    a.vx *= 0.7; b.vx *= 0.7;
-  }
-}
-function updateEnemies() {
-  for (let e of enemies) {
-    if (!e.alive) {
-      if (e.deadTimer > 0) { e.deadTimer--; e.deathAnim++; }
-      continue;
-    }
-
-    if (e.shockedTimer > 0) {
-      e.shockedTimer--;
-      if (e.shockedTimer === 0) {
-        let owner = players[e.shockOwnerId] || null;
-        defeatEnemy(e, owner, 70, 18, `${owner ? owner.name : 'A player'} electrocuted an enemy!`, 'lightning');
-        playSfx('lightningZap');
-      }
-      continue;
-    }
-
-    if (e.stunnedTimer > 0) {
-      e.stunnedTimer--;
-      e.x += e.vx;
-      if (e.x <= e.left || e.x + e.w >= e.right) {
-        e.x = constrain(e.x, e.left, e.right - e.w);
-        e.vx *= -0.18;
-      }
-      if (!e.onGround || abs(e.vy) > 0.05) {
-        e.vy += gravity * 0.88;
-        e.vy = min(e.vy, 14);
-        e.y += e.vy;
-        e.onGround = false;
-        collideEnemySolids(e);
-      }
-      if (e.onGround) {
-        e.vx = lerp(e.vx, 0, 0.24);
-        if (abs(e.vx) < 0.08) e.vx = 0;
-      }
-      if (e.stunnedTimer === 0) {
-        let baseSpeed = e.kind === 'hopper' ? 1.7 : e.kind === 'drone' ? 2.0 : 1.35;
-        let dir = e.x + e.w * 0.5 > (e.left + e.right) * 0.5 ? -1 : 1;
-        e.vx = baseSpeed * dir;
-        e.vy = 0;
-        e.onGround = e.kind !== 'drone';
-      }
-      continue;
-    }
-
-    if (e.frozenTimer > 0) {
-      e.frozenTimer--;
-    } else if (e.kind === 'drone') {
-      e.x += e.vx;
-      if (e.x <= e.left || e.x + e.w >= e.right) { e.vx *= -1; e.x = constrain(e.x, e.left, e.right - e.w); }
-      e.y = e.baseY + sin(frameCount * 0.05 + e.phase) * 24;
-    } else {
-      e.x += e.vx;
-      if (e.x <= e.left || e.x + e.w >= e.right) { e.vx *= -1; e.x = constrain(e.x, e.left, e.right - e.w); }
-      e.vy += gravity * 0.75;
-      if (e.kind === 'hopper') {
-        e.hopTimer--;
-        if (e.onGround && e.hopTimer <= 0) { e.vy = -8.9; e.onGround = false; e.hopTimer = 78; }
-      }
-      e.y += e.vy;
-      e.onGround = false;
-      collideEnemySolids(e);
-    }
-
-    for (let p of activePlayers()) {
-      if (!p.alive || p.finished || !e.alive) continue;
-      if (!rectsOverlap(p, e)) continue;
-      let prevBottom = p.prevY + p.h;
-      let currBottom = p.y + p.h;
-      let centerX = p.x + p.w * 0.5;
-      let stomped = p.vy >= -0.5 && prevBottom <= e.y + 16 && currBottom >= e.y && centerX >= e.x - 6 && centerX <= e.x + e.w + 6;
-      if (e.frozenTimer > 0) {
-        if (stomped) { defeatEnemy(e, p, 55, 16, `${p.name} smashed a frozen enemy!`, 'iceBreak'); p.vy = -11.4; playSfx('ice'); }
-        continue;
-      }
-      if (p.shieldTimer > 0 || p.invincibleTimer > 0) {
-        if (p.shieldTimer > 0) { defeatEnemy(e, p, 35, 8, `${p.name} shield smashed an enemy!`, 'stomp'); playSfx('stomp'); }
-        continue;
-      }
-      if (stomped) {
-        defeatEnemy(e, p, 60, 20, `${p.name} stomped an enemy!`, 'stomp');
-        p.vy = -12.3;
-        playSfx('stomp');
-      } else {
-        loseLife(p, `${p.name} got hit by an enemy!`, false);
-      }
-    }
-  }
-}
-
-function collideEnemySolids(e) {
-  for (let s of solids) {
-    if (!rectsOverlap(e, s)) continue;
-    if (e.vy > 0) { e.y = s.y - e.h; e.vy = 0; e.onGround = true; }
-    else if (e.vy < 0) { e.y = s.y + s.h; e.vy = 0; }
-  }
-}
-
-function updateForcePowers() {
-  for (let p of activePlayers()) {
-    if (!p.alive || p.finished || !p.forceFiring) continue;
-    if (p.darkTimer > 0) {
-      if (p.shotCooldown <= 0) { p.shotCooldown = 5; playSfx('lightningShot'); }
-      let beam = getDarkBeam(p);
-      for (let e of enemies) {
-        if (!e.alive || e.shockedTimer > 0 || e.frozenTimer > 0) continue;
-        if (rectsOverlap(beam.hitbox, e)) { e.shockedTimer = 30; e.shockOwnerId = p.id; e.vx = 0; e.vy = 0; }
-      }
-    } else if (p.lightTimer > 0) {
-      if (p.shotCooldown <= 0) { p.shotCooldown = 10; playSfx('forcePush'); }
-      let wave = getLightPushWave(p);
-      for (let e of enemies) {
-        if (!e.alive || e.shockedTimer > 0 || e.stunnedTimer > 0 || e.frozenTimer > 0) continue;
-        if (rectsOverlap(wave.hitbox, e)) {
-          let pushStrength = e.kind === 'drone' ? 8.6 : e.kind === 'hopper' ? 7.4 : 6.8;
-          e.stunnedTimer = 95;
-          e.pushOwnerId = p.id;
-          e.vx = p.facing * pushStrength;
-          e.x += p.facing * (e.kind === 'drone' ? 10 : 8);
-          if (e.kind === 'drone') {
-            e.vy = max(e.vy, 5.6);
-            e.y += 4;
-          } else {
-            e.vy = -2.4;
-            e.onGround = false;
-          }
-          showMessage(`${p.name} blasted an enemy away with the Force!`);
-        }
-      }
-    }
-  }
-}
-
-function getDarkBeam(p) {
-  let beamW = 150, beamH = 84;
-  let bx = p.facing > 0 ? p.x + p.w - 4 : p.x - beamW + 4;
-  let by = p.y + p.h * 0.1;
-  return { x1: p.x + p.w * 0.5 + p.facing * (p.w * 0.38), y1: p.y + p.h * 0.36, x2: p.x + p.w * 0.5 + p.facing * (beamW + p.w * 0.2), y2: p.y + p.h * 0.36, hitbox: { x: bx, y: by, w: beamW, h: beamH } };
-}
-
-function getLightPushWave(p) {
-  let waveW = 170, waveH = 102;
-  let bx = p.facing > 0 ? p.x + p.w - 8 : p.x - waveW + 8;
-  let by = p.y + p.h * 0.02;
-  return { hitbox: { x: bx, y: by, w: waveW, h: waveH } };
-}
-
-function updateProjectiles() {
-  for (let i = projectiles.length - 1; i >= 0; i--) {
-    let pr = projectiles[i];
-    pr.life--;
-    pr.x += pr.vx;
-    pr.y += pr.vy;
-    let hitSolid = false;
-    for (let s of solids) {
-      if (s.y >= groundY) continue;
-      if (circleRectOverlap(pr.x, pr.y, pr.r, s)) { hitSolid = true; break; }
-    }
-    let hitEnemy = false;
-    for (let e of enemies) {
-      if (!e.alive) continue;
-      if (!circleRectOverlap(pr.x, pr.y, pr.r, e)) continue;
-      hitEnemy = true;
-      let owner = players[pr.ownerId];
-      if (pr.type === 'ice') {
-        e.frozenTimer = 240;
-        e.vx = 0;
-        e.vy = 0;
-        if (owner) { owner.score += 28; owner.xp += 10; showMessage(`${owner.name} froze an enemy into a block!`); }
-        playSfx('ice');
-      } else if (pr.type === 'fire') {
-        defeatEnemy(e, owner, 50, 15, `${owner.name} set an enemy on fire!`, 'fire');
-        playSfx('shootHit');
-      }
-      break;
-    }
-    let remove = pr.life <= 0 || pr.x < 0 || pr.x > worldWidth || pr.y < 0 || pr.y > height || hitSolid || hitEnemy;
-    if (remove) projectiles.splice(i, 1);
-  }
-}
-
-function collectCoins() {
-  for (let c of coins) {
-    if (c.collected) continue;
-    for (let p of activePlayers()) {
-      if (!p.alive) continue;
-      let dx = p.x + p.w * 0.5 - c.x;
-      let dy = p.y + p.h * 0.5 - c.y;
-      if (dx * dx + dy * dy < (c.r + 18) * (c.r + 18)) { c.collected = true; p.coins++; p.xp += 5; p.score += 10; playSfx('coin'); break; }
-    }
-  }
-}
-
-function collectPowerUps() {
-  for (let pUp of powerUps) {
-    if (pUp.collected) continue;
-    for (let p of activePlayers()) {
-      if (!p.alive || !rectsOverlap(p, pUp)) continue;
-      pUp.collected = true;
-      playSfx('power');
-      if (pUp.type === 'force') {
-        pendingForceChoice = { playerId: p.id };
-        paused = true;
-        p.score += 60;
-        showMessage(`${p.name} found a Force power. Choose the dark side or the light side.`);
-      } else if (pUp.type === 'fire') {
-        p.fireTimer = 60 * 14; p.shotMode = 'fire'; p.score += 60;
-        showMessage(`${p.name} got Fire: ${p.controls.attackLabel} launches fireballs that ignite enemies.`);
-      } else if (pUp.type === 'ice') {
-        p.iceTimer = 60 * 14; p.shotMode = 'ice'; p.score += 60;
-        showMessage(`${p.name} got Ice: ${p.controls.attackLabel} freezes enemies into ice blocks.`);
-      } else if (pUp.type === 'saber') {
-        p.saberTimer = 60 * 10; p.saberCooldown = 0; p.score += 70;
-        showMessage(`${p.name} got Lightsaber: ${p.controls.attackLabel} now swings a long chopping slash for 10 seconds.`);
-        playSfx('saberOn');
-      } else if (pUp.type === 'shield') {
-        p.shieldTimer = 60 * 8; p.invincibleTimer = 60 * 8; p.score += 40;
-        showMessage(`${p.name} got Shield: temporary invincibility.`);
-      }
-      break;
-    }
-  }
-}
-
-function updateCheckpoint() {
-  if (!checkpointReached) {
-    for (let p of activePlayers()) {
-      if (p.alive && p.x > checkpointMarkerX) {
-        checkpointReached = true;
-        checkpointX = checkpointMarkerX;
-        for (let pl of players) pl.checkpointX = checkpointX;
-        playSfx('checkpoint');
-        showMessage(gameMode === 'co-op' ? 'Team checkpoint reached!' : 'Checkpoint reached!');
-        break;
-      }
-    }
-  }
-}
-
-function updateFinish() {
-  for (let p of activePlayers()) {
-    if (!p.alive || p.finished) continue;
-    if (p.x + p.w > finishFlag.x && p.y + p.h > finishFlag.y) {
-      p.finished = true;
-      scene = 'win';
-      paused = false;
-      let bonus = floor(max(0, 1800 - gameTicks / 9));
-      p.score += 240 + bonus;
-      highScore = max(highScore, runScore());
-      saveHighScore();
-      playSfx('win');
-      showMessage(`${p.name} reached the finish!`);
-      break;
-    }
-  }
-}
-
-function saberCanHit(p, e) {
-  let reach = 154;
-  let frontCheck = p.facing > 0 ? e.x < p.x + p.w + reach && e.x + e.w > p.x + p.w - 12 : e.x + e.w > p.x - reach && e.x < p.x + 12;
-  let sameLane = abs((e.y + e.h * 0.5) - (p.y + p.h * 0.5)) < 62;
-  return frontCheck && sameLane;
-}
-
-function performSaberSlash(p) {
-  if (p.saberCooldown > 0 || p.saberTimer <= 0) return;
-  p.saberCooldown = 18;
-  p.saberSwingTimer = 10;
-  playSfx('saberSlash');
-  let hitAny = false;
-  for (let e of enemies) {
-    if (!e.alive) continue;
-    if (!saberCanHit(p, e)) continue;
-    defeatEnemy(e, p, 85, 24, `${p.name} sliced through an enemy!`, 'saber');
-    hitAny = true;
-  }
-  if (!hitAny) showMessage(`${p.name} swung the lightsaber!`);
-}
-
-function defeatEnemy(enemy, owner, scoreGain, xpGain, msg, style) {
-  if (!enemy || !enemy.alive) return;
-  enemy.alive = false;
-  enemy.vx = 0;
-  enemy.vy = 0;
-  enemy.deathStyle = style || 'pop';
-  enemy.deathAnim = 0;
-  enemy.deathFacing = owner ? owner.facing : 1;
-  enemy.deadTimer = enemy.deathStyle === 'fire' ? 40 : enemy.deathStyle === 'lightning' ? 30 : enemy.deathStyle === 'saber' ? 34 : enemy.deathStyle === 'iceBreak' ? 22 : enemy.deathStyle === 'stomp' ? 16 : 14;
-  if (owner) { owner.score += scoreGain || 0; owner.xp += xpGain || 0; }
-  if (msg) showMessage(msg);
-}
-
-function loseLife(p, msg, respawnFromCheckpoint) {
-  if (!p.alive || p.hurtTimer > 0 || p.invincibleTimer > 0) return;
-  if (p.big) {
-    p.big = false;
-    p.lives = max(1, p.lives - 1);
-    p.hurtTimer = 90;
-    p.invincibleTimer = 140;
-    p.crouching = false;
-    updatePlayerSize(p);
-    p.vx = -p.facing * 3.8;
-    p.vy = -7.5;
-    if (respawnFromCheckpoint) { respawnPlayer(p); showMessage(msg + ' They respawned small at the checkpoint.'); }
-    else showMessage(msg + ' They shrank instead of respawning.');
-    playSfx('hurt');
-    return;
-  }
-  if (p.lives > 1) {
-    p.lives--;
-    p.hurtTimer = 90;
-    p.invincibleTimer = 150;
-    respawnPlayer(p);
-    playSfx('hurt');
-    showMessage(msg + ` ${p.name} used a reserve life and respawned.`);
-    return;
-  }
-  p.lives = 0;
-  p.alive = false;
-  p.hurtTimer = 90;
-  p.vx = 0;
-  p.vy = 0;
-  playSfx('hurt');
-  if (livingPlayers().length === 0) {
-    scene = 'gameover'; paused = false; highScore = max(highScore, runScore()); saveHighScore();
-  }
-  showMessage(msg + ` ${p.name} is knocked out.`);
-}
-
-function respawnPlayer(p) {
-  let respawnX = checkpointReached ? max(checkpointX, p.checkpointX || 120) : 120;
-  p.checkpointX = respawnX;
-  p.x = respawnX + p.id * 44;
-  p.y = 280;
-  p.vx = 0;
-  p.vy = 0;
-}
-
-function updateCamera() {
-  let active = activePlayers().filter(p => p.alive || p.finished);
-  if (active.length === 0) return;
-  let midX = active.reduce((sum, p) => sum + p.x + p.w * 0.5, 0) / active.length;
-  cameraX = constrain(midX - width * 0.45, 0, worldWidth - width);
-}
-
-function isWorldRectVisible(x, y, w, h, pad = 140) {
-  return x + w >= cameraX - pad && x <= cameraX + width + pad && y + h >= -pad && y <= height + pad;
-}
-
-function isWorldCircleVisible(x, y, r, pad = 140) {
-  return x + r >= cameraX - pad && x - r <= cameraX + width + pad && y + r >= -pad && y - r <= height + pad;
-}
-
-function drawShadow(cx, cy, w, h, alpha = 46) {
-  noStroke();
-  fill(25, 30, 45, alpha);
-  ellipse(cx, cy, w, h);
-}
-
-function drawGlassPanel(x, y, w, h, radius, tint) {
-  noStroke();
-  fill(0, 0, 0, 55);
-  rect(x + 4, y + 6, w, h, radius + 2);
-  let c = tint || color(22, 30, 42, 210);
-  fill(c);
-  rect(x, y, w, h, radius);
-  stroke(255, 255, 255, 28);
-  strokeWeight(1.5);
-  noFill();
-  rect(x + 1, y + 1, w - 2, h - 2, max(4, radius - 2));
-  noStroke();
-}
-
-function drawUIButton(btn, hover, selected, baseColor, accentColor) {
-  let base = baseColor || color(70, 90, 115);
-  let accent = accentColor || color(120, 220, 160);
-  noStroke();
-  fill(0, 0, 0, hover ? 65 : 42);
-  rect(btn.x + 4, btn.y + 5, btn.w, btn.h, 14);
-  fill(red(accent), green(accent), blue(accent), hover ? 70 : 28);
-  rect(btn.x - 4, btn.y - 4, btn.w + 8, btn.h + 8, 16);
-  stroke(selected ? accent : color(125, 145, 170));
-  strokeWeight(selected ? 3 : 1.5);
-  fill(hover ? lerpColor(base, color(255), 0.12) : base);
-  rect(btn.x, btn.y, btn.w, btn.h, 12);
-  noStroke();
   fill(255);
-  textSize(24);
-  text(btn.label, btn.x + btn.w / 2, btn.y + btn.h / 2 - 1);
-}
+  textStyle(BOLD);
+  textSize(27);
+  text(`${selectedStage + 1}. ${theme.name.toUpperCase()}`, W / 2, 138);
+  textStyle(NORMAL);
+  fill(195, 213, 229);
+  textSize(14);
+  text(theme.story, W / 2, 178);
 
-function drawStatusChip(x, y, label, fillCol) {
-  noStroke();
-  fill(0, 0, 0, 45);
-  rect(x + 2, y + 3, textWidth(label) + 22, 22, 10);
-  fill(fillCol);
-  rect(x, y, textWidth(label) + 22, 22, 10);
-  fill(20, 25, 35);
+  drawMiniStagePreview(theme);
+  menuButtons.forEach((button) => drawMenuButton(button, theme));
+
+  const character = CFG.characters[selectedCharacter];
+  fill(color(character.body));
+  circle(222, 433, 24);
+  fill(255);
   textAlign(LEFT, CENTER);
+  textSize(15);
+  text(`PILOT: ${character.name.toUpperCase()}`, 247, 433);
+
+  const stageId = theme.id;
+  const best = progress.bestScores[stageId] || 0;
+  const bestTime = progress.bestTimes[stageId];
+  const grade = progress.bestGrades[stageId] || '—';
+  fill(180, 199, 216);
+  textAlign(CENTER, CENTER);
   textSize(13);
-  text(label, x + 11, y + 11);
+  text(`BEST ${best}  ·  ${bestTime ? formatTime(bestTime) : '--:--'}  ·  GRADE ${grade}  ·  SHARDS ${progress.shards[stageId] || 0}/3`, W / 2, 475);
+  fill(130, 155, 177);
+  text('Q / E stage  ·  1 / 2 mode  ·  C pilot  ·  Enter launch', W / 2, 505);
 }
 
-function drawLifePips(p, x, y) {
-  for (let i = 0; i < p.maxLives; i++) {
-    let filled = i < p.lives;
-    fill(filled ? color(255, 110, 130) : color(70, 80, 95));
-    stroke(filled ? color(255, 190, 205) : color(110, 120, 135));
-    strokeWeight(1.2);
-    circle(x + i * 18, y, 12);
-  }
+function drawMiniStagePreview(theme) {
+  const x = 170;
+  const y = 208;
+  const widthValue = 620;
+  const heightValue = 105;
   noStroke();
-}
-function drawWorld() {
-  drawParallax();
-  drawGround();
-  drawSolids();
-  drawCoins();
-  drawPowerUps();
-  drawEnemies();
-  drawProjectiles();
-  drawForcePowers();
-  drawFinishFlag();
-  drawCheckpointSign();
-  drawPlayers();
+  fill(color(theme.palette.skyBottom));
+  rect(x, y, widthValue, heightValue, 16);
+  fill(color(theme.palette.far));
+  for (let index = 0; index < 5; index++) ellipse(x + index * 160, y + heightValue, 240, 95);
+  fill(color(theme.palette.ground));
+  rect(x, y + 78, widthValue, 27, 0, 0, 16, 16);
+  fill(color(theme.palette.platform));
+  rect(x + 110, y + 62, 75, 12, 5);
+  rect(x + 255, y + 45, 70, 12, 5);
+  rect(x + 405, y + 60, 78, 12, 5);
+  fill(color(theme.palette.hazard));
+  rect(x + 530, y + 48, 42, 30, 9);
+  fill(color(theme.palette.accent));
+  circle(x + 150, y + 40, 12);
+  circle(x + 290, y + 25, 12);
+  circle(x + 445, y + 38, 12);
+
+  const dotY = y + heightValue + 12;
+  for (let index = 0; index < CFG.stages.length; index++) {
+    fill(index === selectedStage ? color(theme.palette.accent) : index < progress.unlockedStages ? color(115, 145, 170) : color(48, 61, 74));
+    circle(W / 2 - 50 + index * 20, dotY, index === selectedStage ? 10 : 7);
+  }
 }
 
-function drawSky() {
-  let sunset = activePlayers().some(p => p.darkTimer > 0);
+function drawMenuButton(button, theme) {
+  const hover = pointInButton(mouseX, mouseY, button);
+  let selected = false;
+  if (button.action === 'single') selected = gameMode === 'single';
+  if (button.action === 'co-op') selected = gameMode === 'co-op';
+  const disabled = (button.action === 'prevStage' && selectedStage === 0) || (button.action === 'nextStage' && selectedStage >= progress.unlockedStages - 1);
+  drawButton(button, hover, selected, disabled, theme);
+}
+
+function drawButton(button, hover, selected, disabled, theme) {
   noStroke();
-  for (let y = 0; y < height; y += 6) {
-    let t = map(y, 0, height, 0, 1);
-    let topCol = sunset ? color(95, 72, 150) : color(95, 175, 255);
-    let bottomCol = sunset ? color(255, 160, 100) : color(190, 235, 255);
-    fill(lerpColor(topCol, bottomCol, t));
-    rect(0, y, width, 6);
-  }
-  fill(sunset ? color(255, 175, 105, 55) : color(255, 250, 210, 42));
-  rect(0, height * 0.58, width, height * 0.22);
-  for (let s of stars) {
-    let sx = (s.x - cameraX * 0.08 + width * 3) % (width + 60);
-    fill(255, 255, 255, sunset ? 95 : 65);
-    circle(sx, s.y, s.s);
-  }
-  fill(sunset ? color(255, 170, 90) : color(255, 240, 120));
-  circle(width - 120, sunset ? 150 : 90, sunset ? 82 : 90);
-  fill(255, 255, 255, sunset ? 22 : 28);
-  circle(width - 120, sunset ? 150 : 90, sunset ? 108 : 118);
-}
-
-function drawParallax() {
-  for (let c of clouds) {
-    let cx = c.x - cameraX * 0.24;
-    if (cx < -260 || cx > width + 260) continue;
-    drawCloud(cx, c.y, c.w, c.h);
-  }
-  noStroke();
-  fill(130, 180, 120);
-  for (let h of hills) {
-    let hx = h.x - cameraX * 0.16;
-    if (hx < -h.w || hx > width + h.w) continue;
-    ellipse(hx, groundY + 20, h.w, h.h);
-  }
-  fill(95, 145, 105);
-  for (let i = -1; i < 12; i++) ellipse(i * 180 - (cameraX * 0.3 % 180), groundY + 40, 250, 120);
-}
-
-function drawCloud(x, y, w, h) {
-  fill(255, 255, 255, 220);
-  ellipse(x, y, w * 0.45, h * 0.75);
-  ellipse(x + w * 0.2, y - h * 0.15, w * 0.4, h * 0.7);
-  ellipse(x + w * 0.4, y, w * 0.48, h * 0.82);
-}
-
-function drawGround() {
-  noStroke();
-  fill(82, 178, 88);
-  rect(0, groundY, worldWidth, height - groundY);
-  fill(105, 88, 56);
-  rect(0, groundY + 18, worldWidth, height - groundY);
-  fill(125, 205, 118, 90);
-  rect(0, groundY, worldWidth, 8);
-  fill(255, 255, 255, 18);
-  for (let x = floor(cameraX / 44) * 44; x < cameraX + width + 80; x += 44) rect(x, groundY + 6, 24, 2, 2);
-}
-
-function drawSolids() {
-  rectMode(CORNER);
-  noStroke();
-  for (let s of solids) {
-    if (s.style === 'ground') continue;
-    if (!isWorldRectVisible(s.x, s.y, s.w, s.h, 180)) continue;
-    drawShadow(s.x + s.w * 0.5, s.y + s.h + 6, min(s.w * 0.9, 120), 12, 18);
-    if (s.style === 'roof') {
-      fill(90, 70, 100); rect(s.x, s.y, s.w, s.h, 5);
-      fill(130, 105, 145); rect(s.x, s.y + s.h - 6, s.w, 6, 0, 0, 5, 5);
-      fill(255, 255, 255, 16); rect(s.x + 6, s.y + 4, s.w - 12, 3, 3);
-    } else if (s.style === 'platform') {
-      fill(140, 100, 160); rect(s.x, s.y, s.w, s.h, 6);
-      fill(190, 145, 210); rect(s.x, s.y, s.w, 8, 6, 6, 0, 0);
-      fill(90, 60, 110, 24); rect(s.x + 6, s.y + 10, s.w - 12, s.h - 12, 4);
-    } else {
-      fill(185, 110, 70); rect(s.x, s.y, s.w, s.h, 6);
-      fill(220, 150, 90); rect(s.x, s.y, s.w, 10, 6, 6, 0, 0);
-      fill(145, 90, 56, 28); rect(s.x + 6, s.y + 12, s.w - 12, s.h - 18, 4);
-    }
-  }
-}
-
-function drawCoins() {
-  textAlign(CENTER, CENTER);
-  strokeWeight(2);
-  for (let c of coins) {
-    if (c.collected || !isWorldCircleVisible(c.x, c.y, c.r, 120)) continue;
-    let bob = sin(frameCount * 0.1 + c.x * 0.02) * 3;
-    drawShadow(c.x, c.y + c.r + 13, c.r * 1.7, 8, 24);
-    fill(255, 225, 60); stroke(210, 160, 20); circle(c.x, c.y + bob, c.r * 2);
-    noStroke(); fill(255, 245, 180); circle(c.x, c.y + bob, c.r);
-    fill(255, 255, 255, 60); ellipse(c.x - 3, c.y + bob - 4, c.r * 0.55, c.r * 0.35);
-    strokeWeight(2);
-  }
-  noStroke();
-}
-
-function drawPowerUps() {
-  rectMode(CORNER);
-  textAlign(CENTER, CENTER);
-  for (let p of powerUps) {
-    if (p.collected) continue;
-    let bob = sin(frameCount * 0.08 + p.x * 0.02) * 4;
-    if (!isWorldRectVisible(p.x, p.y + bob, p.w, p.h, 120)) continue;
-    drawShadow(p.x + p.w * 0.5, p.y + p.h + 14, 28, 9, 24);
-    let y = p.y + bob;
-    if (p.type === 'force') { fill(170, 120, 255); rect(p.x, y, p.w, p.h, 8); fill(40, 20, 90); textSize(18); text('?', p.x + p.w / 2, y + p.h / 2 + 1); }
-    else if (p.type === 'fire') { fill(255, 125, 70); rect(p.x, y, p.w, p.h, 8); fill(255, 245, 210); textSize(18); text('F', p.x + p.w / 2, y + p.h / 2 + 1); }
-    else if (p.type === 'ice') { fill(135, 230, 255); rect(p.x, y, p.w, p.h, 8); fill(245); textSize(18); text('I', p.x + p.w / 2, y + p.h / 2 + 1); }
-    else if (p.type === 'saber') { fill(110, 255, 200); rect(p.x, y, p.w, p.h, 8); fill(20, 90, 70); textSize(18); text('L', p.x + p.w / 2, y + p.h / 2 + 1); }
-    else { fill(100, 240, 255); rect(p.x, y, p.w, p.h, 8); fill(20, 80, 120); textSize(18); text('S', p.x + p.w / 2, y + p.h / 2 + 1); }
-    fill(255, 255, 255, 24); rect(p.x + 4, y + 4, p.w - 8, 5, 4);
-  }
-}
-
-function drawEnemies() {
-  rectMode(CORNER);
-  for (let e of enemies) {
-    if ((!e.alive && e.deadTimer <= 0) || !isWorldRectVisible(e.x, e.y, e.w, e.h, 180)) continue;
-    if (!e.alive) { drawEnemyDeath(e); continue; }
-    drawShadow(e.x + e.w * 0.5, min(groundY + 8, e.y + e.h + 8), e.kind === 'drone' ? 26 : 30, e.kind === 'drone' ? 8 : 10, 26);
-    if (e.frozenTimer > 0) {
-      fill(170, 235, 255, 220); rect(e.x - 2, e.y - 2, e.w + 4, e.h + 4, 8);
-      fill(220, 250, 255, 140); rect(e.x + 4, e.y + 4, e.w * 0.28, e.h * 0.7, 5);
-      fill(120, 170, 210, 120); rect(e.x + 6, e.y + 7, e.w - 12, e.h - 14, 6);
-      continue;
-    }
-    if (e.kind === 'walker') {
-      fill(155, 70, 180); rect(e.x, e.y, e.w, e.h, 8);
-      fill(190, 105, 220); rect(e.x + 4, e.y + 4, e.w - 8, 8, 5);
-      fill(255); circle(e.x + 10, e.y + 12, 7); circle(e.x + 24, e.y + 12, 7);
-      fill(20); circle(e.x + 10, e.y + 12, 3); circle(e.x + 24, e.y + 12, 3);
-      stroke(20); line(e.x + 9, e.y + 24, e.x + 25, e.y + 24); noStroke();
-    } else if (e.kind === 'hopper') {
-      fill(90, 200, 90); triangle(e.x + e.w * 0.5, e.y, e.x, e.y + e.h, e.x + e.w, e.y + e.h);
-      fill(130, 235, 120); triangle(e.x + e.w * 0.5, e.y + 6, e.x + 8, e.y + e.h - 4, e.x + e.w - 8, e.y + e.h - 4);
-      fill(255); circle(e.x + 12, e.y + 16, 7); circle(e.x + 24, e.y + 16, 7);
-      fill(20); circle(e.x + 12, e.y + 16, 3); circle(e.x + 24, e.y + 16, 3);
-    } else {
-      fill(70, 120, 255); ellipse(e.x + e.w * 0.5, e.y + e.h * 0.5, e.w * 0.75, e.h * 0.7);
-      fill(110, 160, 255, 190); ellipse(e.x + 8, e.y + 14, 18, 12); ellipse(e.x + e.w - 8, e.y + 14, 18, 12);
-      fill(255); circle(e.x + 14, e.y + 18, 6); circle(e.x + 28, e.y + 18, 6);
-      fill(10); circle(e.x + 14, e.y + 18, 2.5); circle(e.x + 28, e.y + 18, 2.5);
-    }
-    if (e.shockedTimer > 0) drawEnemyShock(e);
-    if (e.stunnedTimer > 0) drawEnemyStun(e);
-  }
-}
-
-function drawEnemyShock(e) {
-  noFill(); stroke(120, 220, 255, 220); strokeWeight(2); rect(e.x - 2, e.y - 2, e.w + 4, e.h + 4, 8);
-  for (let i = 0; i < 6; i++) { let sx = e.x + random(2, e.w - 2); let sy = e.y + random(2, e.h - 2); line(sx, sy, sx + random(-10, 10), sy + random(-10, 10)); }
-  noStroke();
-}
-
-function drawEnemyStun(e) {
-  let alpha = map(e.stunnedTimer, 0, 95, 40, 200, true);
-  fill(255, 245, 160, alpha);
-  for (let i = 0; i < 3; i++) {
-    let ang = frameCount * 0.08 + i * TWO_PI / 3;
-    let sx = e.x + e.w * 0.5 + cos(ang) * (e.w * 0.45);
-    let sy = e.y - 6 + sin(ang) * 8;
-    circle(sx, sy, 7);
-  }
-}
-
-function drawEnemyDeath(e) {
-  let t = e.deathAnim, alpha = map(e.deadTimer, 0, 40, 0, 255, true);
-  if (e.deathStyle === 'stomp') { fill(110, 60, 130, alpha); rect(e.x, e.y + e.h * 0.55, e.w, e.h * 0.3, 8); return; }
-  if (e.deathStyle === 'fire') { fill(90, 50, 50, alpha); rect(e.x, e.y, e.w, e.h, 8); for (let i = 0; i < 4; i++) { let fx = e.x + 8 + i * 8; let fy = e.y + e.h - 6 - sin((frameCount + i * 7) * 0.25) * 10; fill(255, 120 + i * 20, 60, alpha); triangle(fx, fy, fx - 6, fy + 14, fx + 6, fy + 14); fill(255, 240, 120, alpha * 0.85); triangle(fx, fy + 4, fx - 3, fy + 12, fx + 3, fy + 12); } return; }
-  if (e.deathStyle === 'lightning') { push(); translate(random(-2, 2), random(-2, 2)); fill(70, 120, 200, alpha); rect(e.x, e.y, e.w, e.h, 8); stroke(130, 220, 255, alpha); strokeWeight(2); for (let i = 0; i < 8; i++) { let sx = e.x + random(3, e.w - 3); let sy = e.y + random(3, e.h - 3); line(sx, sy, sx + random(-10, 10), sy + random(-10, 10)); } noStroke(); pop(); return; }
-  if (e.deathStyle === 'saber') { let split = min(14, t * 0.8); fill(155, 70, 180, alpha); rect(e.x - split * 0.35, e.y + 2, e.w * 0.48, e.h - 4, 6); rect(e.x + e.w * 0.52 + split * 0.35, e.y + 2, e.w * 0.48, e.h - 4, 6); fill(90, 200, 90, alpha * 0.9); rect(e.x + e.w * 0.22 + min(18, t * 0.9), e.y + e.h * 0.22, 8, 12, 4); stroke(120, 255, 200, alpha); strokeWeight(3); line(e.x + e.w * 0.48, e.y - 4, e.x + e.w * 0.48, e.y + e.h + 4); noStroke(); return; }
-  if (e.deathStyle === 'iceBreak') { fill(190, 240, 255, alpha); for (let i = 0; i < 5; i++) rect(e.x + i * 7 + random(-1, 1), e.y + 10 + random(-4, 8), 10, 10, 3); return; }
-  fill(120, 120, 120, alpha); rect(e.x + 4, e.y + 6, e.w - 8, e.h - 12, 6);
-}
-
-function drawProjectiles() {
+  if (disabled) fill(34, 47, 60, 165);
+  else if (selected) fill(color(theme.palette.near));
+  else if (hover) fill(35, 84, 112, 245);
+  else fill(20, 43, 65, 232);
+  rect(button.x, button.y, button.w, button.h, 12);
   noFill();
-  strokeWeight(4);
-  for (let p of projectiles) {
-    if (!isWorldCircleVisible(p.x, p.y, p.r, 90)) continue;
-    drawShadow(p.x, p.y + p.r + 10, p.r * 1.4, 6, 20);
-    if (p.type === 'fire') {
-      noStroke(); fill(255, 120, 70); circle(p.x, p.y, p.r * 2.2); fill(255, 240, 140); circle(p.x, p.y, p.r * 1.2);
-    } else {
-      noStroke(); fill(140, 230, 255); circle(p.x, p.y, p.r * 2.2); fill(240, 255, 255); circle(p.x, p.y, p.r * 1.2);
-    }
-  }
+  stroke(disabled ? color(75, 88, 101) : selected || hover ? color(theme.palette.accent) : color(100, 145, 177));
+  strokeWeight(selected || hover ? 2.5 : 1.5);
+  rect(button.x, button.y, button.w, button.h, 12);
   noStroke();
-}
-
-function drawForcePowers() {
-  for (let p of activePlayers()) {
-    if (!p.alive || !p.forceFiring) continue;
-    if (p.darkTimer > 0) {
-      let beam = getDarkBeam(p); strokeWeight(4);
-      for (let i = 0; i < 4; i++) {
-        stroke(i % 2 === 0 ? color(150, 205, 255, 220) : color(255, 245, 160, 175));
-        let prevX = beam.x1, prevY = beam.y1 + random(-6, 6);
-        for (let step = 1; step <= 7; step++) {
-          let t = step / 7, nx = lerp(beam.x1, beam.x2, t), ny = beam.y2 + random(-20, 20);
-          line(prevX, prevY, nx, ny); prevX = nx; prevY = ny;
-        }
-      }
-      noStroke();
-    } else if (p.lightTimer > 0) {
-      let wave = getLightPushWave(p); push(); noFill(); strokeWeight(5); stroke(210, 245, 255, 170);
-      let cx = p.facing > 0 ? wave.hitbox.x + 24 : wave.hitbox.x + wave.hitbox.w - 24;
-      let baseAngle = p.facing > 0 ? -PI * 0.34 : PI * 0.66;
-      for (let i = 0; i < 3; i++) arc(cx, p.y + p.h * 0.5, 70 + i * 34, 60 + i * 28, baseAngle, baseAngle + PI * 0.68);
-      pop();
-    }
-  }
-}
-
-function drawFinishFlag() { stroke(70); strokeWeight(4); line(finishFlag.x, finishFlag.y, finishFlag.x, finishFlag.y + finishFlag.h); noStroke(); fill(255, 70, 90); triangle(finishFlag.x, finishFlag.y, finishFlag.x + 46, finishFlag.y + 18, finishFlag.x, finishFlag.y + 36); }
-function drawCheckpointSign() {
-  let x = checkpointMarkerX;
-  if (!isWorldRectVisible(x - 24, groundY - 110, 48, 110, 200)) return;
-  stroke(90, 60, 40);
-  strokeWeight(4);
-  line(x, groundY - 10, x, groundY - 70);
-  noStroke();
-  fill(checkpointReached ? color(80, 230, 120) : color(250, 220, 90));
-  rect(x - 18, groundY - 100, 36, 24, 6);
-  fill(20, 25, 30, checkpointReached ? 220 : 120);
+  fill(disabled ? color(95, 105, 115) : color(245));
   textAlign(CENTER, CENTER);
-  textSize(12);
-  text('CP', x, groundY - 88);
+  textStyle(BOLD);
+  textSize(button.w < 80 ? 34 : 16);
+  text(button.label, button.x + button.w / 2, button.y + button.h / 2);
+  textStyle(NORMAL);
 }
 
-function drawPlayers() {
-  let drawOrder = activePlayers().slice().sort((a, b) => a.y - b.y);
-  for (let p of drawOrder) drawPlayer(p);
+function drawPauseOverlay() {
+  drawOverlayBase('CIRCUIT PAUSED', 'P / Escape resumes · Settings can remap every control');
+  const theme = CFG.stages[selectedStage];
+  pauseButtons.forEach((button) => drawButton(button, pointInButton(mouseX, mouseY, button), false, false, theme));
+  fill(190, 210, 226);
+  textAlign(CENTER, CENTER);
+  textSize(14);
+  text(`Time ${formatTime(runTime)}  ·  Score ${runScore()}  ·  Shards ${collectedShardCount()}/3`, W / 2, 416);
 }
 
-function drawPlayer(p) {
-  if (!p.alive && scene !== 'win') return;
-  let blink = p.hurtTimer > 0 && frameCount % 10 < 5;
-  if (blink || !isWorldRectVisible(p.x, p.y, p.w, p.h, 180)) return;
-  drawShadow(p.x + p.w * 0.5, p.y + p.h + 8, p.big ? 28 : 18, 10, 34);
-  push();
-  translate(p.x + p.w / 2, p.y + p.h / 2);
-  scale(p.facing, 1);
-  if (p.shieldTimer > 0) { noFill(); stroke(100, 240, 255, 180); strokeWeight(3); ellipse(0, 0, p.w + 18, p.h + 18); }
-  if (p.darkTimer > 0) { stroke(150, 215, 255, 190); strokeWeight(2); line(-p.w * 0.35, -p.h * 0.35, -p.w * 0.62, -p.h * 0.72); line(p.w * 0.2, -p.h * 0.45, p.w * 0.58, -p.h * 0.78); }
-  if (p.lightTimer > 0) { noFill(); stroke(215, 245, 255, 170); strokeWeight(3); ellipse(0, 0, p.w + 12, p.h + 12); }
-  if (p.saberTimer > 0) {
-    stroke(120, 255, 200); strokeWeight(5);
-    let bladeX = p.w * 0.65;
-    line(bladeX, 2, bladeX + 42, -8 + sin(frameCount * 0.3) * 2);
-    stroke(255, 255, 255, 140); strokeWeight(2);
-    line(bladeX + 2, 2, bladeX + 39, -7 + sin(frameCount * 0.3) * 2);
-    if (p.saberSwingTimer > 0) {
-      noFill(); stroke(120, 255, 200, 170); strokeWeight(6);
-      let arcSize = 94 + p.saberSwingTimer * 3;
-      arc(p.w * 0.92, -6, arcSize, arcSize, -PI * 0.44, PI * 0.5);
-      stroke(255, 255, 255, 120); strokeWeight(2);
-      arc(p.w * 0.92, -6, arcSize - 12, arcSize - 12, -PI * 0.44, PI * 0.5);
-    }
-  }
-  rectMode(CENTER);
-  noStroke();
-  fill(p.big ? p.bodyColor : lerpColor(p.bodyColor, color(255), 0.35));
-  rect(0, 0, p.w, p.h, 8);
-  fill(255, 255, 255, 18);
-  rect(0, -p.h * 0.3, p.w * 0.74, max(8, p.h * 0.16), 4);
-  fill(p.detailColor);
-  rect(0, -p.h * 0.1, p.w * 0.58, max(12, p.h * 0.34), 4);
-  fill(30);
-  circle(p.w * 0.12, -p.h * 0.1, 4);
-  fill(70, 40, 20);
-  rect(-p.w * 0.2, p.h * 0.42, 10, 8, 3);
-  rect(p.w * 0.2, p.h * 0.42, 10, 8, 3);
-  pop();
+function drawChoiceOverlay() {
+  const player = players[pendingChoice.playerId];
+  drawOverlayBase('CHOOSE AN ASPECT', `${player.name} found a rare core. Use ← / → and Enter, or tap a path.`);
+  const theme = CFG.stages[selectedStage];
+  choiceButtons.forEach((button) => {
+    const selected = pendingChoice.selected === button.action;
+    drawButton(button, pointInButton(mouseX, mouseY, button), selected, false, theme);
+    fill(190, 214, 230);
+    textAlign(CENTER, TOP);
+    textSize(13);
+    const description = button.action === 'storm' ? 'Rapid lightning · aggressive score play' : 'Wide push wave · bonus energy';
+    text(description, button.x + button.w / 2, button.y + button.h + 10);
+  });
 }
 
-function drawHUD() {
-  rectMode(CORNER);
-  let playerPanelW = gameMode === 'co-op' ? 500 : 278;
-  drawGlassPanel(16, 14, playerPanelW, 132, 14, color(20, 30, 40, 205));
-  drawGlassPanel(width - 388, 14, 372, 132, 14, color(20, 30, 40, 205));
-  if (gameMode === 'co-op') {
-    if (players[0] && players[0].active) drawPlayerHUD(players[0], 28, 24, 208);
-    if (players[1] && players[1].active) drawPlayerHUD(players[1], 270, 24, 208);
-  } else {
-    if (players[1] && players[1].active) drawPlayerHUD(players[1], 28, 24, 236);
-  }
-  fill(255);
-  textAlign(LEFT, TOP);
-  textSize(18);
-  text(`High score: ${highScore}`, width - 370, 26);
-  text(`Mode: ${gameMode === 'co-op' ? 'co-op' : 'single player'}`, width - 370, 52);
-  text(`Checkpoint: ${checkpointReached ? 'reached' : 'not yet'}`, width - 370, 78);
-  text(`Pause: P   Restart after end: R`, width - 370, 104);
-  if (levelMessageTimer > 0) {
-    let alpha = map(levelMessageTimer, 0, 180, 0, 1, true);
-    let boxW = min(620, max(320, textWidth(levelMessage) + 46));
-    drawGlassPanel(width / 2 - boxW / 2, 18, boxW, 44, 11, color(20, 30, 40, 150 + 45 * alpha));
-    fill(255, 255, 255, 235 * alpha);
-    textAlign(CENTER, CENTER);
-    textSize(18);
-    text(levelMessage, width / 2, 39);
-  }
-}
-
-function drawPlayerHUD(p, x, y, blockW) {
-  let headerCol = p.id === 0 ? color(255, 120, 145) : color(110, 180, 255);
-  fill(255);
-  textAlign(LEFT, TOP);
-  textSize(18);
-  text(`${p.name}${p.alive ? '' : ' KO'}`, x, y);
-  fill(headerCol);
-  rect(x, y + 24, blockW - 22, 4, 3);
-  drawLifePips(p, x + 8, y + 44);
-  fill(255);
+function drawGameOverOverlay() {
+  drawOverlayBase('CIRCUIT DARK', world.checkpoint.reached ? 'R retries from the checkpoint · M returns to stages' : 'R restarts the stage · M returns to stages');
+  fill(220);
+  textAlign(CENTER, CENTER);
   textSize(16);
-  text(`Coins ${p.coins}`, x + 74, y + 33);
-  text(`XP ${p.xp}`, x + 154, y + 33);
-  text(`Score ${p.score}`, x, y + 56);
-  text(`Size ${p.big ? 'big' : 'small'}`, x + 112, y + 56);
-  let attackMode = p.darkTimer > 0 ? 'dark' : p.lightTimer > 0 ? 'light' : p.saberTimer > 0 ? 'saber' : getCurrentShotType(p) || 'basic';
-  text(`Attack ${attackMode}`, x, y + 78);
-  let chipX = x + 110, chipY = y + 76;
+  text(`Time ${formatTime(runTime)}  ·  Score ${runScore()}  ·  Damage ${stageStats.damageTaken}`, W / 2, 350);
+}
+
+function drawWinOverlay() {
+  const theme = CFG.stages[selectedStage];
+  fill(3, 9, 18, 185);
+  rect(0, 0, W, H);
+  drawPanel(145, 55, 670, 430, 24, color(5, 15, 29, 235));
+  fill(color(theme.palette.accent));
+  textAlign(CENTER, TOP);
+  textStyle(BOLD);
+  textSize(54);
+  text(`GRADE ${result.grade}`, W / 2, 82);
+  textStyle(NORMAL);
+  fill(255);
+  textSize(25);
+  text(`${theme.name.toUpperCase()} CLEARED`, W / 2, 153);
+  fill(190, 211, 229);
+  textSize(16);
+  text(`Time ${formatTime(result.time)}  ·  Score ${result.score}  ·  Shards ${result.shards}/3`, W / 2, 206);
+  text(`Boss defeated  ·  Damage ${stageStats.damageTaken}  ·  Retries ${stageStats.retries}`, W / 2, 239);
+  if (result.newBest) {
+    fill(color(theme.palette.accent));
+    textStyle(BOLD);
+    text('NEW PERSONAL BEST', W / 2, 277);
+    textStyle(NORMAL);
+  }
+
+  const unlocked = CFG.characters.find((character) => character.unlockStage === progress.unlockedStages);
+  if (unlocked && selectedStage + 2 === unlocked.unlockStage) {
+    fill('#d9b5ff');
+    text(`Pilot unlocked: ${unlocked.name}`, W / 2, 310);
+  }
+  fill(225);
+  textSize(16);
+  text(selectedStage < CFG.stages.length - 1 ? 'Enter: next stage  ·  R: replay  ·  M: stage menu' : 'Enter: stage menu  ·  R: replay the finale', W / 2, 377);
+  fill(135, 158, 179);
   textSize(13);
-  if (p.darkTimer > 0) { drawStatusChip(chipX, chipY, `Dark ${ceil(p.darkTimer / 60)}s`, color(175, 220, 255)); chipY += 26; }
-  if (p.lightTimer > 0) { drawStatusChip(chipX, chipY, `Light ${ceil(p.lightTimer / 60)}s`, color(220, 245, 255)); chipY += 26; }
-  if (p.fireTimer > 0) { drawStatusChip(chipX, chipY, `Fire ${ceil(p.fireTimer / 60)}s`, color(255, 180, 110)); chipY += 26; }
-  if (p.iceTimer > 0) { drawStatusChip(chipX, chipY, `Ice ${ceil(p.iceTimer / 60)}s`, color(160, 232, 255)); chipY += 26; }
-  if (p.saberTimer > 0) { drawStatusChip(chipX, chipY, `Saber ${ceil(p.saberTimer / 60)}s`, color(120, 255, 200)); chipY += 26; }
-  if (p.shieldTimer > 0) { drawStatusChip(chipX, chipY, `Shield ${ceil(p.shieldTimer / 60)}s`, color(100, 240, 255)); }
+  text('S grade: beat par, collect every shard, and take no damage.', W / 2, 424);
 }
 
-function drawStartScreen() {
-  drawGlassPanel(width / 2 - 380, 42, 760, 454, 22, color(20, 30, 40, 175));
+function drawOverlayBase(titleValue, subtitle) {
+  fill(3, 9, 18, 176);
+  rect(0, 0, W, H);
+  drawPanel(120, 105, 720, 340, 24, color(5, 15, 29, 235));
   fill(255);
-  textAlign(CENTER, CENTER);
+  textAlign(CENTER, TOP);
+  textStyle(BOLD);
   textSize(40);
-  text('Tiny Platformer Quest DX', width / 2, 100);
-  fill(210, 225, 240);
-  textSize(19);
-  text('Choose a mode to begin your demo run', width / 2, 140);
-  fill(255);
-  text('Single player: arrows move • Up jump • Down crouch • / ? attack', width / 2, 186);
-  text('Co-op P1: A/D move • W jump • S crouch • SPACE attack', width / 2, 216);
-  text('Co-op P2: arrows move • Up jump • Down crouch • / ? attack', width / 2, 246);
-  text('Fire and Ice are separate powers • lightsaber attacks are manual slashes', width / 2, 284);
-  text('Force power asks light side or dark side • pause menu has restart + main menu', width / 2, 314);
-  fill(255, 230, 150);
-  text(`High score: ${highScore}`, width / 2, 348);
-  for (let btn of modeButtons) {
-    let selected = gameMode === btn.mode;
-    let hover = mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h;
-    drawUIButton(btn, hover, selected, color(70, 90, 115), hover ? color(120, 220, 160) : color(255, 210, 120));
-  }
-  fill(220, 230, 240);
-  textSize(18);
-  text(gameMode === 'co-op' ? 'Co-op: players can bounce on each other and share the same run score.' : 'Single player: only the arrow-key hero is active.', width / 2, 456);
-  fill(170, 190, 210);
-  textSize(16);
-  text('Tip: use 1 / 2 to switch modes, or click a button to start immediately.', width / 2, 482);
+  text(titleValue, W / 2, 145);
+  textStyle(NORMAL);
+  fill(190, 211, 229);
+  textSize(15);
+  text(subtitle, W / 2, 205);
 }
 
-function drawForceChoiceScreen() {
-  fill(10, 15, 20, 185);
-  rect(0, 0, width, height);
-  drawGlassPanel(width / 2 - 310, height / 2 - 150, 620, 250, 22, color(18, 24, 32, 205));
-  fill(255);
-  textAlign(CENTER, CENTER);
-  textSize(42);
-  let chooser = pendingForceChoice ? players[pendingForceChoice.playerId] : null;
-  text(`${chooser ? chooser.name : 'Player'}, choose your path`, width / 2, height / 2 - 86);
-  textSize(20);
-  text('Click one of the two sides below', width / 2, height / 2 - 40);
-  for (let btn of forceChoiceButtons) {
-    let hover = mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h;
-    let baseCol = btn.side === 'dark' ? color(120, 38, 46) : color(45, 78, 132);
-    let glowCol = btn.side === 'dark' ? color(255, 70, 70) : color(80, 150, 255);
-    drawUIButton(btn, hover, false, baseCol, glowCol);
-  }
+function drawPanel(x, y, widthValue, heightValue, radius, panelColor) {
+  noStroke();
+  fill(panelColor);
+  rect(x, y, widthValue, heightValue, radius);
+  noFill();
+  stroke(145, 205, 240, 44);
+  strokeWeight(1.5);
+  rect(x + 1, y + 1, widthValue - 2, heightValue - 2, radius);
+  noStroke();
 }
 
-function drawPauseScreen() {
-  fill(10, 15, 20, 175);
-  rect(0, 0, width, height);
-  drawGlassPanel(width / 2 - 360, height / 2 - 112, 720, 250, 22, color(18, 24, 32, 210));
-  fill(255);
-  textAlign(CENTER, CENTER);
-  textSize(50);
-  text('PAUSED', width / 2, height / 2 - 52);
-  textSize(22);
-  text('Press P to continue or use the buttons below', width / 2, height / 2 - 10);
-  textSize(18);
-  fill(210, 225, 240);
-  text('Restart level resets the run • Main Menu returns to mode select', width / 2, height / 2 + 16);
-  for (let btn of pauseButtons) {
-    let hover = mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h;
-    let accent = btn.action === 'menu' ? color(255, 185, 120) : btn.action === 'restart' ? color(255, 120, 145) : color(120, 220, 160);
-    drawUIButton(btn, hover, false, color(70, 90, 115), accent);
-  }
-  fill(255);
-  textSize(20);
-  text(`Run score: ${runScore()}   |   High score: ${highScore}`, width / 2, height / 2 + 126);
+function worldRectVisible(rectValue, padding = 140) {
+  return rectValue.x + rectValue.w > cameraX - padding && rectValue.x < cameraX + W + padding;
 }
 
-function drawOverlay(titleText, subtitle) {
-  fill(10, 15, 20, 170);
-  rect(0, 0, width, height);
-  drawGlassPanel(width / 2 - 300, height / 2 - 102, 600, 190, 22, color(18, 24, 32, 210));
-  fill(255);
-  textAlign(CENTER, CENTER);
-  textSize(50);
-  text(titleText, width / 2, height / 2 - 36);
-  textSize(24);
-  text(subtitle, width / 2, height / 2 + 12);
-  fill(215, 225, 240);
-  textSize(20);
-  text(`Run score: ${runScore()}   |   High score: ${highScore}`, width / 2, height / 2 + 56);
+function worldCircleVisible(x, _y, radius, padding = 140) {
+  return x + radius > cameraX - padding && x - radius < cameraX + W + padding;
 }
 
-
-function showMessage(msg) { levelMessage = msg; levelMessageTimer = 180; }
-function rectsOverlap(a, b) { return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
-function solidOverlap(box) { for (let s of solids) if (rectsOverlap(box, s)) return true; return false; }
-function circleRectOverlap(cx, cy, r, rectObj) {
-  let closestX = constrain(cx, rectObj.x, rectObj.x + rectObj.w);
-  let closestY = constrain(cy, rectObj.y, rectObj.y + rectObj.h);
-  let dx = cx - closestX, dy = cy - closestY;
-  return dx * dx + dy * dy <= r * r;
+function pointInButton(x, y, button) {
+  return x >= button.x && x <= button.x + button.w && y >= button.y && y <= button.y + button.h;
 }
 
-function keyPressed() {
-  if (pendingForceChoice) {
-    return false;
-  }
-  if (scene === 'start') {
-    if (key === '1') { gameMode = 'single'; resetGame(); return false; }
-    if (key === '2') { gameMode = 'co-op'; resetGame(); return false; }
-    if (keyCode === ENTER) { startGame(); return false; }
-  }
-  if (scene === 'playing' && (key === 'p' || key === 'P')) { paused = !paused; showMessage(paused ? 'Paused' : 'Back in action!'); return false; }
-  if (scene === 'playing' && paused) return false;
-  if (scene === 'playing') {
-    return false;
-  }
-  if ((scene === 'gameover' || scene === 'win') && (key === 'r' || key === 'R')) {
-    if (scene === 'gameover' && checkpointReached) continueFromCheckpointAfterGameOver();
-    else restartFromScratch();
-    return false;
-  }
+function formatTime(seconds) {
+  if (!Number.isFinite(seconds)) return '--:--';
+  const minutes = floor(seconds / 60);
+  const remainder = floor(seconds % 60);
+  const tenths = floor((seconds % 1) * 10);
+  return `${minutes}:${String(remainder).padStart(2, '0')}.${tenths}`;
 }
 
-function keyReleased() {
-  return false;
+function changeStage(direction) {
+  const next = constrain(selectedStage + direction, 0, progress.unlockedStages - 1);
+  if (next === selectedStage) return;
+  selectedStage = next;
+  progress.selectedStage = selectedStage;
+  GameStorage.saveProgress(progress);
+  loadPreview();
+  GameAudio.sfx('menu');
+}
+
+function cycleCharacter() {
+  const available = CFG.characters.map((character, index) => ({ character, index })).filter(({ character }) => progress.unlockedStages >= character.unlockStage);
+  const currentPosition = max(0, available.findIndex(({ index }) => index === selectedCharacter));
+  selectedCharacter = available[(currentPosition + 1) % available.length].index;
+  progress.selectedCharacter = selectedCharacter;
+  GameStorage.saveProgress(progress);
+  loadPreview();
+  GameAudio.sfx('menu');
 }
 
 function mousePressed() {
-  if (pendingForceChoice) {
-    for (let btn of forceChoiceButtons) if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) { chooseForceSide(btn.side); return false; }
+  if (scene === 'menu') {
+    const button = menuButtons.find((item) => pointInButton(mouseX, mouseY, item));
+    if (!button) return false;
+    if (button.action === 'prevStage') changeStage(-1);
+    else if (button.action === 'nextStage') changeStage(1);
+    else if (button.action === 'single' || button.action === 'co-op') { gameMode = button.action; loadPreview(); GameAudio.sfx('menu'); }
+    else if (button.action === 'character') cycleCharacter();
+    else if (button.action === 'start') startRun();
     return false;
   }
-  if (scene === 'playing' && paused) {
-    for (let btn of pauseButtons) {
-      if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
-        if (btn.action === 'resume') { paused = false; showMessage('Back in action!'); }
-        else if (btn.action === 'restart') restartLevelFromPause();
-        else if (btn.action === 'menu') returnToMainMenu();
-        return false;
-      }
-    }
+  if (scene === 'choice') {
+    const button = choiceButtons.find((item) => pointInButton(mouseX, mouseY, item));
+    if (button) chooseAspect(button.action);
     return false;
   }
-  if (scene === 'start') {
-    for (let btn of modeButtons) {
-      if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
-        gameMode = btn.mode;
-        resetGame();
-        startGame();
-        return false;
-      }
-    }
+  if (scene === 'pause') {
+    const button = pauseButtons.find((item) => pointInButton(mouseX, mouseY, item));
+    if (!button) return false;
+    if (button.action === 'resume') togglePause();
+    else if (button.action === 'retry') retryFromCheckpoint();
+    else if (button.action === 'menu') returnToMenu();
     return false;
   }
+  return false;
 }
 
-function chooseForceSide(side) {
-  if (!pendingForceChoice) return;
-  clearPressedCodes();
-  let p = players[pendingForceChoice.playerId];
-  if (!p) { pendingForceChoice = null; paused = false; return; }
-  if (side === 'dark') { p.darkTimer = 60 * 12; p.lightTimer = 0; p.forceFiring = false; showMessage(`${p.name} joined the dark side: hold ${p.controls.attackLabel} for Force lightning.`); }
-  else { p.lightTimer = 60 * 12; p.darkTimer = 0; p.forceFiring = false; p.maxLives = 3; p.lives = min(3, p.lives + 1); p.invincibleTimer = max(p.invincibleTimer, 45); showMessage(`${p.name} chose the light side: hold ${p.controls.attackLabel} to push enemies away and gained an extra life.`); }
-  pendingForceChoice = null; paused = false;
-}
-
-function startGame() { clearPressedCodes(); startAudio(); scene = 'playing'; paused = false; showMessage(gameMode === 'co-op' ? 'Co-op run started!' : 'Single-player run started!'); }
-function returnToMainMenu() { clearPressedCodes(); paused = false; pendingForceChoice = null; resetGame(); showMessage('Back at the main menu. Choose single player or co-op.'); }
-function queueJumpForPlayer(p) { if (scene !== 'playing' || paused || !p || !p.alive) return; p.jumpBufferTimer = 10; }
-function tryJump(p) { if (paused || !p.alive || p.crouching) return; if (!(p.onGround || p.coyoteTimer > 0)) return; p.jumpBufferTimer = 0; p.coyoteTimer = 0; p.vy = p.big ? -14.2 : -13.1; p.onGround = false; playSfx('jump'); }
-function getCurrentShotType(p) { if (p.shotMode === 'fire' && p.fireTimer > 0) return 'fire'; if (p.shotMode === 'ice' && p.iceTimer > 0) return 'ice'; if (p.fireTimer > 0) return 'fire'; if (p.iceTimer > 0) return 'ice'; return null; }
-function tryAttack(p) {
-  if (paused || !p || !p.active || !p.alive) return;
-  if (p.darkTimer > 0 || p.lightTimer > 0) return;
-  if (p.saberTimer > 0) { performSaberSlash(p); return; }
-  if (p.shotCooldown > 0) return;
-  let mode = getCurrentShotType(p);
-  if (mode) { let speed = mode === 'fire' ? 8.5 : 7.5; projectiles.push({ ownerId: p.id, x: p.x + p.w * 0.5 + p.facing * (p.w * 0.55), y: p.y + p.h * 0.42, vx: speed * p.facing, vy: mode === 'fire' ? -0.4 : 0, r: mode === 'fire' ? 8 : 9, life: 110, type: mode }); p.shotCooldown = 16; playSfx('shoot'); }
-}
-function restartLevelFromPause() { clearPressedCodes(); buildBackground(); buildLevel(); players = createPlayers(); checkpointX = 120; checkpointReached = false; gameTicks = 0; cameraX = 0; projectiles = []; pendingForceChoice = null; paused = false; scene = 'playing'; showMessage('Level restarted from the beginning.'); }
-function restartFromScratch() { clearPressedCodes(); buildBackground(); pendingForceChoice = null; resetGame(); startAudio(); scene = 'playing'; paused = false; showMessage(gameMode === 'co-op' ? 'Fresh co-op run from the very beginning!' : 'Fresh single-player run from the very beginning!'); }
-function continueFromCheckpointAfterGameOver() {
-  clearPressedCodes();
-  pendingForceChoice = null;
-  paused = false;
-  scene = 'playing';
-  projectiles = [];
-
-  for (let p of activePlayers()) {
-    p.alive = true;
-    p.finished = false;
-    p.big = true;
-    p.lives = max(2, p.maxLives);
-    p.hurtTimer = 0;
-    p.invincibleTimer = 120;
-    p.crouching = false;
-    p.downHeld = false;
-    p.attackHeld = false;
-    p.forceFiring = false;
-    p.vx = 0;
-    p.vy = 0;
-    p.shotCooldown = 0;
-    p.saberCooldown = 0;
-    p.saberSwingTimer = 0;
-    p.jumpBufferTimer = 0;
-    p.coyoteTimer = 0;
-    updatePlayerSize(p);
-    respawnPlayer(p);
+function keyPressed() {
+  if (document.getElementById('settings-dialog')?.open) return false;
+  if (scene === 'menu') {
+    if (key === '1') { gameMode = 'single'; loadPreview(); }
+    else if (key === '2') { gameMode = 'co-op'; loadPreview(); }
+    else if (key === 'q' || key === 'Q' || keyCode === LEFT_ARROW) changeStage(-1);
+    else if (key === 'e' || key === 'E' || keyCode === RIGHT_ARROW) changeStage(1);
+    else if (key === 'c' || key === 'C') cycleCharacter();
+    else if (keyCode === ENTER) startRun();
+    return false;
   }
+  if (scene === 'playing') {
+    if (key === 'p' || key === 'P' || keyCode === ESCAPE) togglePause();
+    return false;
+  }
+  if (scene === 'pause') {
+    if (key === 'p' || key === 'P' || keyCode === ESCAPE) togglePause();
+    else if (key === 'r' || key === 'R') retryFromCheckpoint();
+    else if (key === 'm' || key === 'M') returnToMenu();
+    return false;
+  }
+  if (scene === 'choice') {
+    if (keyCode === LEFT_ARROW || key === 'a' || key === 'A') pendingChoice.selected = 'storm';
+    else if (keyCode === RIGHT_ARROW || key === 'd' || key === 'D') pendingChoice.selected = 'gale';
+    else if (keyCode === ENTER || key === ' ') chooseAspect(pendingChoice.selected);
+    return false;
+  }
+  if (scene === 'gameover') {
+    if (key === 'r' || key === 'R' || keyCode === ENTER) retryFromCheckpoint();
+    else if (key === 'm' || key === 'M') returnToMenu();
+    return false;
+  }
+  if (scene === 'win') {
+    if (key === 'r' || key === 'R') startRun();
+    else if (key === 'm' || key === 'M') returnToMenu();
+    else if (keyCode === ENTER) returnToMenu(selectedStage < CFG.stages.length - 1);
+    return false;
+  }
+  return false;
+}
 
-  cameraX = max(0, checkpointX - width * 0.35);
-  showMessage('Continuing from the checkpoint.');
-}
-function runScore() { return activePlayers().reduce((sum, p) => sum + p.score, 0); }
-function loadHighScore() { let stored = localStorage.getItem('tinyPlatformerCoopHighScore'); highScore = stored ? int(stored) : 0; }
-function saveHighScore() { localStorage.setItem('tinyPlatformerCoopHighScore', String(highScore)); }
-function startAudio() { if (!audioCtx) { let Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return; audioCtx = new Ctx(); } if (audioCtx.state === 'suspended') audioCtx.resume(); audioStarted = true; }
-
-function playSfx(type) {
-  if (!audioCtx || !audioStarted) return;
-  if (type === 'coin') simpleBeep(880, 0.06, 0.03, 'square');
-  if (type === 'jump') simpleBeep(420, 0.1, 0.04, 'triangle', 620);
-  if (type === 'stomp') simpleBeep(180, 0.12, 0.07, 'square');
-  if (type === 'hurt') simpleBeep(160, 0.2, 0.09, 'sawtooth', 90);
-  if (type === 'power') simpleBeep(520, 0.18, 0.06, 'triangle', 820);
-  if (type === 'checkpoint') simpleBeep(660, 0.15, 0.04, 'square', 980);
-  if (type === 'shoot') simpleBeep(700, 0.09, 0.04, 'square', 340);
-  if (type === 'shootHit') simpleBeep(240, 0.16, 0.06, 'sawtooth', 120);
-  if (type === 'ice') simpleBeep(500, 0.12, 0.04, 'triangle', 260);
-  if (type === 'boing') simpleBeep(250, 0.14, 0.05, 'triangle', 420);
-  if (type === 'lightningShot') dualBeep(640, 0.14, 0.03, 'sawtooth', 1240, 0.028, 'square');
-  if (type === 'lightningZap') dualBeep(220, 0.12, 0.05, 'sawtooth', 640, 0.03, 'square');
-  if (type === 'lightningHum') dualBeep(180, 0.08, 0.008, 'sawtooth', 300, 0.006, 'triangle');
-  if (type === 'forcePush') dualBeep(170, 0.16, 0.03, 'triangle', 440, 0.02, 'sine');
-  if (type === 'saberOn') dualBeep(90, 0.24, 0.025, 'sawtooth', 180, 0.018, 'triangle');
-  if (type === 'saberHum') dualBeep(92, 0.12, 0.01, 'sawtooth', 138, 0.007, 'triangle');
-  if (type === 'saberSlash') playSaberSwingSound();
-  if (type === 'saberOff') simpleBeep(180, 0.18, 0.02, 'triangle', 70);
-  if (type === 'win') { simpleBeep(523.25, 0.1, 0.05, 'triangle'); simpleBeep(659.25, 0.15, 0.05, 'triangle'); simpleBeep(783.99, 0.2, 0.05, 'triangle'); }
-}
-function simpleBeep(freq, duration, volume, wave, endFreq) { let now = audioCtx.currentTime, osc = audioCtx.createOscillator(), gain = audioCtx.createGain(); osc.type = wave || 'sine'; osc.frequency.setValueAtTime(freq, now); if (endFreq) osc.frequency.exponentialRampToValueAtTime(endFreq, now + duration); gain.gain.setValueAtTime(0.0001, now); gain.gain.exponentialRampToValueAtTime(volume, now + 0.01); gain.gain.exponentialRampToValueAtTime(0.0001, now + duration); osc.connect(gain); gain.connect(audioCtx.destination); osc.start(now); osc.stop(now + duration + 0.02); }
-function dualBeep(freqA, duration, volA, waveA, freqB, volB, waveB) { simpleBeep(freqA, duration, volA, waveA, freqA * 1.2); simpleBeep(freqB, duration, volB, waveB, freqB * 0.92); }
-function playSaberSwingSound() {
-  let now = audioCtx.currentTime, master = audioCtx.createGain(); master.gain.setValueAtTime(0.0001, now); master.gain.exponentialRampToValueAtTime(0.05, now + 0.01); master.gain.exponentialRampToValueAtTime(0.0001, now + 0.22); master.connect(audioCtx.destination);
-  let hum = audioCtx.createOscillator(); hum.type = 'sawtooth'; hum.frequency.setValueAtTime(130, now); hum.frequency.exponentialRampToValueAtTime(175, now + 0.06); hum.frequency.exponentialRampToValueAtTime(120, now + 0.22); hum.connect(master); hum.start(now); hum.stop(now + 0.24);
-  let swing = audioCtx.createOscillator(); swing.type = 'sawtooth'; swing.frequency.setValueAtTime(220, now); swing.frequency.exponentialRampToValueAtTime(780, now + 0.08); swing.frequency.exponentialRampToValueAtTime(170, now + 0.22); swing.connect(master); swing.start(now); swing.stop(now + 0.24);
-  let shimmerGain = audioCtx.createGain(); shimmerGain.gain.setValueAtTime(0.0001, now); shimmerGain.gain.exponentialRampToValueAtTime(0.012, now + 0.02); shimmerGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18); shimmerGain.connect(audioCtx.destination);
-  let shimmer = audioCtx.createOscillator(); shimmer.type = 'triangle'; shimmer.frequency.setValueAtTime(480, now); shimmer.frequency.exponentialRampToValueAtTime(1240, now + 0.06); shimmer.frequency.exponentialRampToValueAtTime(320, now + 0.18); shimmer.connect(shimmerGain); shimmer.start(now); shimmer.stop(now + 0.2);
-}
-function updateMusic() { if (!audioCtx || !audioStarted) return; if (frameCount % 18 !== 0) return; let note = musicMelody[musicIndex % musicMelody.length], bass = musicBass[bassIndex % musicBass.length]; playMusicNote(note, 0.16, 0.025, 'triangle'); if (musicIndex % 2 === 0) { playMusicNote(bass, 0.22, 0.02, 'sine'); bassIndex++; } musicIndex++; }
-function playMusicNote(freq, duration, volume, wave) { let now = audioCtx.currentTime, osc = audioCtx.createOscillator(), gain = audioCtx.createGain(); osc.type = wave || 'triangle'; osc.frequency.setValueAtTime(freq, now); gain.gain.setValueAtTime(0.0001, now); gain.gain.exponentialRampToValueAtTime(volume, now + 0.02); gain.gain.exponentialRampToValueAtTime(0.0001, now + duration); osc.connect(gain); gain.connect(audioCtx.destination); osc.start(now); osc.stop(now + duration + 0.03); }
+function keyReleased() { return false; }

@@ -1,0 +1,179 @@
+:root {
+  color-scheme: dark;
+  --ink: #f7fbff;
+  --muted: #a8b6c8;
+  --panel: rgba(8, 19, 34, 0.9);
+  --line: rgba(140, 211, 255, 0.32);
+  --cyan: #77e6ff;
+  --gold: #ffd36a;
+  --danger: #ff758f;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  min-height: 100%;
+  margin: 0;
+  background:
+    radial-gradient(circle at 50% -20%, #183a68 0, transparent 42rem),
+    linear-gradient(180deg, #07111f 0%, #050a12 100%);
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+body { padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
+
+button, select, input { font: inherit; }
+button { cursor: pointer; }
+
+#app {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+}
+
+.game-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 auto 10px;
+  width: min(960px, 100%);
+}
+
+.game-bar h1, .settings-heading h2 { margin: 0; letter-spacing: 0.08em; }
+.game-bar h1 { font-size: clamp(1.5rem, 5vw, 2.6rem); line-height: 0.8; color: var(--gold); }
+.eyebrow { margin: 0 0 3px; color: var(--cyan); font-size: 0.72rem; letter-spacing: 0.22em; }
+
+.game-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.game-actions button, dialog button, dialog select {
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--ink);
+  background: rgba(18, 39, 65, 0.88);
+  padding: 8px 13px;
+}
+.game-actions button:hover, dialog button:hover { border-color: var(--cyan); background: rgba(27, 61, 96, 0.96); }
+
+#game-shell {
+  position: relative;
+  width: min(960px, 100%);
+  aspect-ratio: 16 / 9;
+  margin: 0 auto;
+  border: 1px solid rgba(117, 230, 255, 0.25);
+  border-radius: 16px;
+  overflow: hidden;
+  background: #0b1725;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(255,255,255,0.04) inset;
+  touch-action: none;
+}
+
+#canvas-mount, #canvas-mount canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+#canvas-mount canvas { outline: none; }
+#canvas-mount canvas:focus-visible { box-shadow: 0 0 0 4px var(--cyan) inset; }
+
+#game-help {
+  width: min(960px, 100%);
+  margin: 10px auto 0;
+  color: var(--muted);
+  text-align: center;
+  font-size: clamp(0.72rem, 2.5vw, 0.9rem);
+}
+
+#touch-controls { display: none; }
+
+.touch-cluster { display: flex; gap: 10px; align-items: end; }
+.touch-key {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.38);
+  background: rgba(7, 17, 31, 0.74);
+  color: white;
+  font-weight: 800;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.28);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.touch-key.jump, .touch-key.attack { width: 70px; height: 70px; font-size: 0.76rem; }
+.touch-key.attack { border-color: rgba(255, 211, 106, 0.7); }
+.touch-key.is-active { transform: translateY(2px) scale(0.96); background: rgba(66, 150, 194, 0.88); }
+
+dialog {
+  width: min(720px, calc(100% - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 0;
+  color: var(--ink);
+  background: #0a1727;
+  box-shadow: 0 28px 100px rgba(0,0,0,0.7);
+}
+dialog::backdrop { background: rgba(2, 7, 13, 0.82); backdrop-filter: blur(8px); }
+.settings-card { padding: clamp(18px, 4vw, 30px); }
+.settings-heading, .settings-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.icon-button { width: 42px; padding: 0 !important; font-size: 1.7rem; }
+.settings-card > label { display: grid; gap: 8px; margin-top: 20px; color: var(--muted); }
+.settings-card select, .settings-card input[type="range"] { width: 100%; }
+.check-row { display: flex !important; grid-template-columns: auto 1fr; align-items: center; }
+.check-row input { width: 18px; height: 18px; }
+.keybinds { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 18px; }
+.keybinds h3 { margin: 0; }
+.keybinds p { color: var(--muted); margin: 6px 0 14px; }
+.keybind-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; align-items: center; }
+.keybind-grid button { padding: 7px; font-size: 0.76rem; }
+.keybind-grid button.is-listening { border-color: var(--gold); color: var(--gold); }
+.settings-footer { margin-top: 26px; border-top: 1px solid var(--line); padding-top: 18px; }
+.settings-footer .primary { background: #176779; border-color: var(--cyan); }
+.settings-footer .danger { color: #ffabb9; border-color: rgba(255,117,143,0.5); }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+body.high-contrast #game-shell { border-color: #fff; box-shadow: 0 0 0 3px #000, 0 0 0 5px #fff; }
+
+@media (pointer: coarse), (max-width: 760px) {
+  body { padding-inline: 6px; }
+  .game-bar { padding-inline: 6px; }
+  .game-actions button { min-height: 36px; padding: 6px 9px; font-size: 0.76rem; }
+  #game-shell { border-radius: 10px; }
+  #touch-controls {
+    position: absolute;
+    inset: auto 10px 10px;
+    z-index: 5;
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+  .touch-key { pointer-events: auto; }
+  #game-help { padding-inline: 8px; }
+  .keybind-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 500px) {
+  .game-bar { align-items: end; }
+  .game-actions { max-width: 230px; }
+  .touch-key { width: 48px; height: 48px; }
+  .touch-key.jump, .touch-key.attack { width: 60px; height: 60px; }
+  .touch-cluster { gap: 6px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+}

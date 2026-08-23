@@ -1,33 +1,105 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Tiny Platformer Quest</title>
-  <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      background: #0f1720;
-      overflow: hidden;
-      font-family: monospace;
-      height: 100%;
-    }
-    body {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    canvas {
-      display: block;
-      margin: 0 auto;
-      box-shadow: 0 18px 50px rgba(0,0,0,0.35);
-      border-radius: 8px;
-    }
-  </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07111f">
+  <meta name="description" content="Skybound Circuit DX — a responsive one or two-player arcade platformer with six worlds, bosses, secrets, and unlockable pilots.">
+  <title>Skybound Circuit DX</title>
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <script src="https://cdn.jsdelivr.net/npm/p5/lib/p5.min.js"></script>
-  <script src="sketch.js"></script>
+  <main id="app" aria-label="Skybound Circuit DX">
+    <header class="game-bar">
+      <div>
+        <p class="eyebrow">SKYBOUND CIRCUIT</p>
+        <h1>DX</h1>
+      </div>
+      <div class="game-actions" aria-label="Game actions">
+        <button id="settings-button" type="button" aria-haspopup="dialog">Settings</button>
+        <button id="mute-button" type="button" aria-pressed="false">Sound on</button>
+        <button id="fullscreen-button" type="button">Fullscreen</button>
+      </div>
+    </header>
+
+    <section id="game-shell" aria-label="Game canvas and touch controls">
+      <div id="canvas-mount"></div>
+      <div id="touch-controls" aria-label="Touch controls">
+        <div class="touch-cluster touch-move">
+          <button class="touch-key" data-code="ArrowLeft" aria-label="Move left">◀</button>
+          <button class="touch-key" data-code="ArrowDown" aria-label="Crouch">▼</button>
+          <button class="touch-key" data-code="ArrowRight" aria-label="Move right">▶</button>
+        </div>
+        <div class="touch-cluster touch-actions">
+          <button class="touch-key jump" data-code="ArrowUp" aria-label="Jump">JUMP</button>
+          <button class="touch-key attack" data-code="Slash" aria-label="Attack">HIT</button>
+        </div>
+      </div>
+    </section>
+
+    <p id="game-help">Move with arrows or A/D · Jump with Up or W · Attack with / or Space · Pause with P</p>
+    <p id="game-status" class="sr-only" aria-live="polite"></p>
+  </main>
+
+  <dialog id="settings-dialog" aria-labelledby="settings-title">
+    <form method="dialog" class="settings-card">
+      <div class="settings-heading">
+        <div>
+          <p class="eyebrow">CONTROL ROOM</p>
+          <h2 id="settings-title">Settings</h2>
+        </div>
+        <button class="icon-button" value="close" aria-label="Close settings">×</button>
+      </div>
+
+      <label>
+        Difficulty
+        <select id="difficulty-select">
+          <option value="easy">Explorer</option>
+          <option value="normal">Arcade</option>
+          <option value="hard">Overdrive</option>
+        </select>
+      </label>
+
+      <label>
+        Master volume
+        <input id="volume-range" type="range" min="0" max="1" step="0.05" value="0.65">
+      </label>
+
+      <label class="check-row"><input id="reduced-motion" type="checkbox"> Reduce motion and screen shake</label>
+      <label class="check-row"><input id="high-contrast" type="checkbox"> High-contrast hazards</label>
+
+      <section class="keybinds" aria-labelledby="keybind-title">
+        <h3 id="keybind-title">Keyboard controls</h3>
+        <p>Select a control, then press a new key.</p>
+        <div class="keybind-grid">
+          <strong>P1</strong>
+          <button type="button" class="keybind" data-player="0" data-action="left">Left: A</button>
+          <button type="button" class="keybind" data-player="0" data-action="right">Right: D</button>
+          <button type="button" class="keybind" data-player="0" data-action="jump">Jump: W</button>
+          <button type="button" class="keybind" data-player="0" data-action="down">Crouch: S</button>
+          <button type="button" class="keybind" data-player="0" data-action="attack">Attack: Space</button>
+          <strong>P2</strong>
+          <button type="button" class="keybind" data-player="1" data-action="left">Left: ←</button>
+          <button type="button" class="keybind" data-player="1" data-action="right">Right: →</button>
+          <button type="button" class="keybind" data-player="1" data-action="jump">Jump: ↑</button>
+          <button type="button" class="keybind" data-player="1" data-action="down">Crouch: ↓</button>
+          <button type="button" class="keybind" data-player="1" data-action="attack">Attack: /</button>
+        </div>
+      </section>
+
+      <div class="settings-footer">
+        <button id="reset-progress" type="button" class="danger">Reset progress</button>
+        <button value="close" class="primary">Done</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/p5@2.3.1/lib/p5.min.js"></script>
+  <script src="src/config.js"></script>
+  <script src="src/storage.js"></script>
+  <script src="src/input.js"></script>
+  <script src="src/audio.js"></script>
+  <script src="src/levels.js"></script>
+  <script src="sketch.js"></script>
 </body>
 </html>
