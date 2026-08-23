@@ -1,0 +1,11 @@
+{
+  "name": "skybound-circuit-dx",
+  "version": "2.0.0",
+  "private": true,
+  "description": "A responsive one- or two-player arcade platformer built with p5.js.",
+  "scripts": {
+    "check": "node --check sketch.js && node --check src/config.js && node --check src/storage.js && node --check src/input.js && node --check src/audio.js && node --check src/levels.js",
+    "test": "node --test tests/*.test.mjs",
+    "verify": "npm run check && npm test"
+  }
+}
