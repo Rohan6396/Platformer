@@ -49,6 +49,8 @@ test('page exposes responsive, touch, settings, and accessible controls', async 
   const css = await source('styles.css');
   const input = await source('src/input.js');
   assert.match(html, /p5@2\.3\.1/);
+  assert.match(html, /sketch\.js\?v=2\.0\.1/);
+  assert.match(html, /styles\.css\?v=2\.0\.1/);
   assert.match(html, /id="touch-controls"/);
   assert.match(html, /aria-live="polite"/);
   assert.match(html, /id="settings-dialog"/);
