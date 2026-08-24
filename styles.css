@@ -127,10 +127,16 @@ dialog::backdrop { background: rgba(2, 7, 13, 0.82); backdrop-filter: blur(8px);
 .settings-card { padding: clamp(18px, 4vw, 30px); }
 .settings-heading, .settings-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .icon-button { width: 42px; padding: 0 !important; font-size: 1.7rem; }
-.settings-card > label { display: grid; gap: 8px; margin-top: 20px; color: var(--muted); }
+.settings-card > label, .settings-field { display: grid; gap: 8px; margin-top: 20px; color: var(--muted); }
 .setting-label { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .setting-label output { color: var(--gold); font-weight: 800; }
-.settings-card label small { color: #758aa1; font-size: 0.72rem; }
+.settings-card small { color: #758aa1; font-size: 0.72rem; }
+.difficulty-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.difficulty-options button { min-width: 0; padding-inline: 7px; }
+.difficulty-options button.is-selected { color: #07111f; border-color: var(--gold); background: var(--gold); }
+.audio-status-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 9px; margin-top: 3px; }
+.audio-status-row output { color: var(--cyan); font-weight: 800; }
+.audio-status-row button { min-height: 34px; padding-block: 5px; }
 .settings-card select, .settings-card input[type="range"] { width: 100%; }
 .check-row { display: flex !important; grid-template-columns: auto 1fr; align-items: center; }
 .check-row input { width: 18px; height: 18px; }
@@ -183,6 +189,7 @@ body.high-contrast #game-shell { border-color: #fff; box-shadow: 0 0 0 3px #000,
   .touch-key { width: 48px; height: 48px; }
   .touch-key.jump, .touch-key.attack { width: 60px; height: 60px; }
   .touch-cluster { gap: 6px; }
+  .difficulty-options { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -90,11 +90,12 @@ test('page exposes responsive, touch, settings, and accessible controls', async 
   const input = await source('src/input.js');
   const sketch = await source('sketch.js');
   assert.match(html, /p5@2\.3\.1/);
-  assert.match(html, /sketch\.js\?v=2\.1\.1/);
-  assert.match(html, /styles\.css\?v=2\.1\.1/);
+  assert.match(html, /sketch\.js\?v=2\.1\.2/);
+  assert.match(html, /styles\.css\?v=2\.1\.2/);
   assert.match(html, /id="touch-controls"/);
   assert.match(html, /aria-live="polite"/);
   assert.match(html, /id="settings-dialog"/);
+  assert.match(html, /id="difficulty-hard"/);
   assert.match(css, /pointer: coarse/);
   assert.match(input, /navigator\.getGamepads/);
   assert.match(input, /requestFullscreen/);
@@ -119,19 +120,24 @@ test('difficulty and volume controls update settings, labels, and audio preview'
     'settings-button': fakeElement(),
     'mute-button': fakeElement(),
     'fullscreen-button': fakeElement(),
-    'difficulty-select': fakeElement(),
+    'difficulty-easy': fakeElement({ dataset: { difficulty: 'easy' } }),
+    'difficulty-normal': fakeElement({ dataset: { difficulty: 'normal' } }),
+    'difficulty-hard': fakeElement({ dataset: { difficulty: 'hard' } }),
     'volume-range': fakeElement(),
     'difficulty-value': fakeElement(),
     'volume-value': fakeElement(),
+    'music-status': fakeElement(),
+    'music-test': fakeElement(),
     'reduced-motion': fakeElement(),
     'high-contrast': fakeElement(),
     'reset-progress': fakeElement()
   };
   const dispatched = [];
   const saved = [];
+  const windowListeners = {};
   const context = vm.createContext({
     window: {
-      addEventListener() {},
+      addEventListener(type, listener) { (windowListeners[type] ||= []).push(listener); },
       dispatchEvent: (event) => { dispatched.push(event); }
     },
     document: {
@@ -158,8 +164,7 @@ test('difficulty and volume controls update settings, labels, and audio preview'
   vm.runInContext(await source('src/input.js'), context, { filename: 'input.js' });
   context.window.GameInput.install();
 
-  elements['difficulty-select'].value = 'hard';
-  elements['difficulty-select'].dispatch('change');
+  elements['difficulty-hard'].dispatch('click');
   const difficultyEvent = dispatched.find((event) => event.type === 'game-settings-changed');
   assert.equal(context.window.GameInput.getSettings().difficulty, 'hard');
   assert.equal(elements['difficulty-value'].textContent, 'Overdrive');
@@ -173,6 +178,17 @@ test('difficulty and volume controls update settings, labels, and audio preview'
   assert.ok(dispatched.some((event) => event.type === 'game-audio-preview'));
   assert.equal(difficultyEvent.detail.volume, 0.65, 'settings events should be immutable snapshots');
   assert.equal(saved.at(-1).volume, 0.25);
+
+  elements['settings-dialog'].open = true;
+  let controlPrevented = false;
+  windowListeners.keydown[0]({
+    code: 'ArrowDown', target: { tagName: 'BUTTON' },
+    preventDefault() { controlPrevented = true; }
+  });
+  assert.equal(controlPrevented, false, 'game controls must not block keyboard use of the difficulty buttons');
+
+  elements['music-test'].dispatch('click');
+  assert.ok(dispatched.some((event) => event.type === 'game-audio-test'));
 });
 
 test('public-facing copy restores its Star Wars fan identity and disclaimer', async () => {
@@ -298,6 +314,23 @@ test('closing settings applies a new difficulty by restarting the active stage',
   assert.equal(context.window.restartedOnDifficulty, 'hard');
 });
 
+test('the settings dialog allows native keyboard events for its controls', async () => {
+  const context = vm.createContext({
+    window: { addEventListener() {} },
+    document: { getElementById: () => ({ open: true }) },
+    navigator: {}, console
+  });
+  vm.runInContext(await source('src/config.js'), context, { filename: 'config.js' });
+  context.GameConfig = context.window.GameConfig;
+  context.GameStorage = {
+    loadSettings: () => ({ ...context.GameConfig.defaultSettings }),
+    loadProgress: () => ({ unlockedStages: 1, selectedStage: 0, selectedCharacter: 0 })
+  };
+  vm.runInContext(await source('sketch.js'), context, { filename: 'sketch.js' });
+  assert.equal(vm.runInContext('keyPressed()', context), true);
+  assert.equal(vm.runInContext('keyReleased()', context), true);
+});
+
 test('Enter on the win screen immediately starts the next unlocked stage', async () => {
   const context = vm.createContext({
     window: { addEventListener() {} },
@@ -326,6 +359,62 @@ test('Enter on the win screen immediately starts the next unlocked stage', async
   `, context);
   assert.equal(context.window.startedStage, 1);
   assert.equal(context.savedStage, 1);
+});
+
+test('music uses a continuous generated media loop with visible playback status', async () => {
+  const mediaInstances = [];
+  const listeners = {};
+  const statuses = [];
+  class FakeAudio {
+    constructor() {
+      this.paused = true;
+      this.listeners = {};
+      this.playCalls = 0;
+      this.currentTime = 0;
+      mediaInstances.push(this);
+    }
+    addEventListener(type, listener) { this.listeners[type] = listener; }
+    load() {}
+    pause() { this.paused = true; }
+    play() {
+      this.playCalls++;
+      this.paused = false;
+      this.listeners.playing?.();
+      return Promise.resolve();
+    }
+  }
+  const context = vm.createContext({
+    window: {
+      Audio: FakeAudio,
+      Blob: class FakeBlob { constructor(parts, options) { this.parts = parts; this.type = options.type; } },
+      URL: { createObjectURL: () => 'blob:music', revokeObjectURL() {} },
+      addEventListener: (type, listener) => { listeners[type] = listener; },
+      dispatchEvent: (event) => { if (event.type === 'game-audio-status') statuses.push(event.detail); }
+    },
+    CustomEvent: class CustomEvent {
+      constructor(type, options = {}) { this.type = type; this.detail = options.detail; }
+    },
+    GameStorage: { loadSettings: () => ({ muted: false, volume: 0.65 }) },
+    console, Promise, Math, Date
+  });
+  vm.runInContext(await source('src/audio.js'), context, { filename: 'audio.js' });
+  const audio = context.window.GameAudio;
+  assert.equal(audio.start(2), true);
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(mediaInstances.length, 1);
+  assert.equal(mediaInstances[0].loop, true);
+  assert.equal(mediaInstances[0].playCalls, 1);
+  assert.ok(statuses.includes('Playing'));
+
+  audio.applySettings({ muted: false, volume: 0.5 });
+  assert.equal(mediaInstances[0].volume, 0.36);
+  mediaInstances[0].paused = true;
+  listeners['game-audio-test']();
+  await Promise.resolve();
+  assert.ok(mediaInstances[0].playCalls >= 2);
 });
 
 test('music resumes from a suspended browser audio context and schedules notes', async () => {

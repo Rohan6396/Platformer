@@ -9,6 +9,13 @@
   let musicStep = 0;
   let resumePromise = null;
   let lastPreviewAt = -Infinity;
+  let musicElement = null;
+  let musicUrl = null;
+  let musicStage = -1;
+  let musicPlayPromise = null;
+  let musicWanted = false;
+  let musicPreviewUntil = 0;
+  let currentStage = 0;
 
   const melodies = [
     [523.25, 659.25, 783.99, 880, 783.99, 659.25, 587.33, 698.46],
@@ -18,6 +25,102 @@
     [349.23, 440, 523.25, 659.25, 587.33, 523.25, 440, 392],
     [261.63, 329.63, 392, 493.88, 523.25, 493.88, 392, 329.63]
   ];
+
+  function reportStatus(status) {
+    if (typeof window.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') return;
+    window.dispatchEvent(new CustomEvent('game-audio-status', { detail: status }));
+  }
+
+  function writeAscii(view, offset, value) {
+    for (let index = 0; index < value.length; index++) view.setUint8(offset + index, value.charCodeAt(index));
+  }
+
+  function buildMusicBlob(stageIndex) {
+    if (typeof window.Blob !== 'function') return null;
+    const sampleRate = 12000;
+    const beat = stageIndex === 5 ? 0.24 : 0.3;
+    const notes = melodies[stageIndex % melodies.length];
+    const duration = beat * notes.length * 4;
+    const sampleCount = Math.floor(sampleRate * duration);
+    const buffer = new ArrayBuffer(44 + sampleCount * 2);
+    const view = new DataView(buffer);
+    writeAscii(view, 0, 'RIFF');
+    view.setUint32(4, 36 + sampleCount * 2, true);
+    writeAscii(view, 8, 'WAVE');
+    writeAscii(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeAscii(view, 36, 'data');
+    view.setUint32(40, sampleCount * 2, true);
+    for (let index = 0; index < sampleCount; index++) {
+      const time = index / sampleRate;
+      const beatIndex = Math.floor(time / beat);
+      const beatPhase = (time % beat) / beat;
+      const note = notes[beatIndex % notes.length];
+      const envelope = Math.min(1, beatPhase / 0.06) * Math.min(1, (1 - beatPhase) / 0.24);
+      const lead = Math.sin(Math.PI * 2 * note * time) * 0.55;
+      const bassNote = note / (beatIndex % 4 === 0 ? 4 : 2);
+      const bass = Math.sin(Math.PI * 2 * bassNote * time) * 0.28;
+      const pulse = Math.sin(Math.PI * 2 * 54 * (time % beat)) * Math.exp(-beatPhase * 13) * 0.17;
+      const sample = Math.max(-1, Math.min(1, (lead + bass + pulse) * envelope * 0.48));
+      view.setInt16(44 + index * 2, Math.round(sample * 32767), true);
+    }
+    return new window.Blob([buffer], { type: 'audio/wav' });
+  }
+
+  function ensureMusicTrack(stageIndex) {
+    const canUseMedia = typeof window.Audio === 'function' && typeof window.URL?.createObjectURL === 'function';
+    if (!canUseMedia) return false;
+    if (musicElement && musicStage === stageIndex) return true;
+    musicElement?.pause();
+    if (musicUrl) window.URL.revokeObjectURL?.(musicUrl);
+    const blob = buildMusicBlob(stageIndex);
+    if (!blob) return false;
+    musicUrl = window.URL.createObjectURL(blob);
+    musicElement = new window.Audio();
+    musicElement.loop = true;
+    musicElement.preload = 'auto';
+    musicElement.src = musicUrl;
+    musicElement.volume = settings.muted ? 0 : Math.min(1, settings.volume * 0.72);
+    musicElement.muted = settings.muted;
+    musicElement.addEventListener?.('playing', () => reportStatus('Playing'));
+    musicElement.addEventListener?.('waiting', () => reportStatus('Loading…'));
+    musicElement.addEventListener?.('error', () => reportStatus('Blocked'));
+    musicElement.load?.();
+    musicStage = stageIndex;
+    return true;
+  }
+
+  function playMusicTrack() {
+    if (!musicElement || settings.muted || settings.volume <= 0) {
+      reportStatus(settings.muted || settings.volume <= 0 ? 'Muted' : 'Ready');
+      return false;
+    }
+    if (!musicElement.paused) {
+      reportStatus('Playing');
+      return true;
+    }
+    if (musicPlayPromise) return true;
+    reportStatus('Starting…');
+    try {
+      const playResult = musicElement.play();
+      if (playResult?.then) {
+        musicPlayPromise = playResult
+          .then(() => { reportStatus('Playing'); return true; })
+          .catch(() => { reportStatus('Blocked — press Test music'); return false; })
+          .finally(() => { musicPlayPromise = null; });
+      } else reportStatus('Playing');
+      return true;
+    } catch (_error) {
+      reportStatus('Blocked — press Test music');
+      return false;
+    }
+  }
 
   function ensure() {
     if (context?.state === 'closed') {
@@ -54,15 +157,25 @@
       master.gain.cancelScheduledValues(context.currentTime);
       master.gain.setTargetAtTime(value, context.currentTime, 0.025);
     }
+    if (musicElement) {
+      musicElement.muted = settings.muted;
+      musicElement.volume = settings.muted ? 0 : Math.min(1, settings.volume * 0.72);
+      if (!settings.muted && settings.volume > 0 && musicWanted) playMusicTrack();
+      else if (settings.muted || settings.volume <= 0) reportStatus('Muted');
+    }
     if (started && !settings.muted && settings.volume > 0) resumeContext();
   }
 
-  function start() {
-    if (!ensure()) return false;
+  function start(stageIndex = currentStage) {
+    currentStage = stageIndex;
+    const hasContext = ensure();
     started = true;
+    musicWanted = true;
     nextBeatAt = 0;
-    resumeContext();
-    return true;
+    if (hasContext) resumeContext();
+    const hasTrack = ensureMusicTrack(currentStage);
+    if (hasTrack) playMusicTrack();
+    return hasContext || hasTrack;
   }
 
   function previewVolume() {
@@ -126,7 +239,19 @@
   }
 
   function updateMusic(stageIndex, playing) {
-    if (!playing || !started || !context || settings.muted || settings.volume <= 0) return;
+    currentStage = stageIndex;
+    const previewing = Date.now() < musicPreviewUntil;
+    musicWanted = Boolean(playing || previewing);
+    if (!started) return;
+    if (ensureMusicTrack(stageIndex)) {
+      if (musicWanted) playMusicTrack();
+      else if (musicElement && !musicElement.paused) {
+        musicElement.pause();
+        reportStatus('Ready');
+      }
+      return;
+    }
+    if (!playing || !context || settings.muted || settings.volume <= 0) return;
     if (context.state !== 'running') {
       resumeContext();
       return;
@@ -145,12 +270,28 @@
   function resetMusic() {
     musicStep = 0;
     nextBeatAt = 0;
+    if (musicElement) {
+      try { musicElement.currentTime = 0; } catch (_error) { /* media may still be loading */ }
+    }
   }
 
-  const resumeOnGesture = () => { if (started) resumeContext(); };
+  function testMusic() {
+    musicPreviewUntil = Date.now() + 2600;
+    musicWanted = true;
+    start(currentStage);
+    resetMusic();
+    playMusicTrack();
+  }
+
+  const resumeOnGesture = () => {
+    if (!started) return;
+    resumeContext();
+    if (musicWanted) playMusicTrack();
+  };
   window.addEventListener('pointerdown', resumeOnGesture, { capture: true });
   window.addEventListener('keydown', resumeOnGesture, { capture: true });
   window.addEventListener('game-settings-changed', (event) => applySettings(event.detail));
   window.addEventListener('game-audio-preview', previewVolume);
-  window.GameAudio = { start, sfx, updateMusic, resetMusic, applySettings, previewVolume };
+  window.addEventListener('game-audio-test', testMusic);
+  window.GameAudio = { start, sfx, updateMusic, resetMusic, applySettings, previewVolume, testMusic };
 })();

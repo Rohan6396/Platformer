@@ -50,6 +50,7 @@
   }
 
   function handleKeyDown(event) {
+    if (document.getElementById('settings-dialog')?.open && !listeningFor) return;
     if (listeningFor) {
       event.preventDefault();
       settings.bindings[listeningFor.player][listeningFor.action] = event.code;
@@ -95,18 +96,24 @@
     const settingsButton = document.getElementById('settings-button');
     const muteButton = document.getElementById('mute-button');
     const fullscreenButton = document.getElementById('fullscreen-button');
-    const difficulty = document.getElementById('difficulty-select');
+    const difficultyButtons = ['easy', 'normal', 'hard'].map((key) => document.getElementById(`difficulty-${key}`));
     const volume = document.getElementById('volume-range');
     const difficultyValue = document.getElementById('difficulty-value');
     const volumeValue = document.getElementById('volume-value');
+    const musicStatus = document.getElementById('music-status');
+    const musicTest = document.getElementById('music-test');
     const reducedMotion = document.getElementById('reduced-motion');
     const highContrast = document.getElementById('high-contrast');
     let openedDifficulty = settings.difficulty;
 
     function syncSettingsUi() {
-      difficulty.value = settings.difficulty;
       volume.value = String(settings.volume);
       difficultyValue.textContent = GameConfig.difficulties[settings.difficulty].label;
+      difficultyButtons.forEach((button) => {
+        const selected = button.dataset.difficulty === settings.difficulty;
+        button.classList.toggle('is-selected', selected);
+        button.setAttribute('aria-pressed', String(selected));
+      });
       volumeValue.textContent = `${Math.round(settings.volume * 100)}%`;
       reducedMotion.checked = settings.reducedMotion;
       highContrast.checked = settings.highContrast;
@@ -148,10 +155,17 @@
       }
     });
 
-    difficulty.addEventListener('change', () => {
-      settings.difficulty = difficulty.value;
-      difficultyValue.textContent = GameConfig.difficulties[settings.difficulty].label;
-      saveAndNotify();
+    difficultyButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        settings.difficulty = button.dataset.difficulty;
+        difficultyValue.textContent = GameConfig.difficulties[settings.difficulty].label;
+        difficultyButtons.forEach((choice) => {
+          const selected = choice === button;
+          choice.classList.toggle('is-selected', selected);
+          choice.setAttribute('aria-pressed', String(selected));
+        });
+        saveAndNotify();
+      });
     });
     volume.addEventListener('input', () => {
       settings.volume = Number(volume.value);
@@ -161,6 +175,12 @@
       muteButton.setAttribute('aria-pressed', String(settings.muted));
       saveAndNotify();
       window.dispatchEvent(new CustomEvent('game-audio-preview'));
+    });
+    musicTest.addEventListener('click', () => {
+      window.dispatchEvent(new CustomEvent('game-audio-test'));
+    });
+    window.addEventListener('game-audio-status', (event) => {
+      musicStatus.textContent = String(event.detail || 'Ready');
     });
     reducedMotion.addEventListener('change', () => { settings.reducedMotion = reducedMotion.checked; saveAndNotify(); });
     highContrast.addEventListener('change', () => { settings.highContrast = highContrast.checked; saveAndNotify(); });
