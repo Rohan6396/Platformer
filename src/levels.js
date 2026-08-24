@@ -48,6 +48,17 @@
     }
   ];
 
+  const encounterGatePositions = [
+    [1710, 3190],
+    [1710, 2980],
+    [1820, 3220],
+    [1765, 3130],
+    [1905, 3130],
+    [1810, 3215]
+  ];
+
+  const checkpointPreferences = [2550, 2200, 2050, 2050, 2350, 2300];
+
   function coinLine(coins, x, y, count, gap = 42) {
     for (let i = 0; i < count; i++) coins.push({ x: x + i * gap, y, radius: 10, collected: false });
   }
@@ -60,11 +71,13 @@
     }
   }
 
-  function enemy(kind, x, left, right, difficulty, index) {
+  function enemy(kind, x, left, right, difficulty, index, stageIndex, options = {}) {
     const flying = kind === 'drone';
     const speed = (kind === 'hopper' ? 1.7 : flying ? 1.9 : 1.28) * difficulty.enemySpeed;
+    const stageHp = 1 + Math.floor(stageIndex / 2);
+    const hp = Math.max(1, Math.ceil((stageHp + (options.elite ? 1 : 0)) * difficulty.enemyHp));
     return {
-      id: `enemy-${index}`,
+      id: options.id || `enemy-${index}`,
       kind,
       x,
       y: flying ? 300 : GROUND_Y - (kind === 'hopper' ? 30 : 36),
@@ -78,16 +91,33 @@
       right,
       phase: index * 0.83,
       hopTimer: 45 + (index * 17) % 55,
-      hp: 1,
-      maxHp: 1,
+      hp,
+      maxHp: hp,
       alive: true,
       onGround: false,
       frozenTimer: 0,
       stunnedTimer: 0,
       hurtTimer: 0,
       deathTimer: 0,
-      boss: false
+      boss: false,
+      elite: Boolean(options.elite),
+      arenaId: options.arenaId || null
     };
+  }
+
+  function checkpointIsSafe(x, hazards, margin = 90) {
+    const spawnLeft = x + 42;
+    const spawnRight = x + 138;
+    return hazards.every((hazard) => {
+      if (hazard.type === 'vent') return true;
+      return spawnRight + margin < hazard.x || spawnLeft - margin > hazard.x + hazard.w;
+    });
+  }
+
+  function safeCheckpointX(stageIndex, hazards) {
+    const preferred = checkpointPreferences[stageIndex];
+    const candidates = [preferred, preferred - 100, preferred + 100, preferred - 200, preferred + 200, 1750, 2350, 2550];
+    return candidates.find((x) => checkpointIsSafe(x, hazards)) || 2500;
   }
 
   function createStage(stageIndex, difficultyKey) {
@@ -108,7 +138,17 @@
     coinArc(coins, 2850, GROUND_Y - 90, 7);
     coinLine(coins, 3600, GROUND_Y - 40, 4);
 
-    const enemies = layout.enemies.map((item, index) => enemy(item[0], item[1], item[2], item[3], difficulty, index));
+    const enemies = layout.enemies.map((item, index) => enemy(item[0], item[1], item[2], item[3], difficulty, index, stageIndex));
+    encounterGatePositions[stageIndex].forEach((gateX, arenaIndex) => {
+      const arenaId = `blockade-${arenaIndex + 1}`;
+      solids.push({ x: gateX, y: 72, w: 30, h: GROUND_Y - 72, kind: 'gate', arenaGate: arenaId });
+      enemies.push(enemy('hopper', gateX - 235, gateX - 410, gateX - 48, difficulty, enemies.length, stageIndex, {
+        id: `${arenaId}-guard`, elite: true, arenaId
+      }));
+      enemies.push(enemy('drone', gateX - 120, gateX - 390, gateX - 42, difficulty, enemies.length, stageIndex, {
+        id: `${arenaId}-drone`, elite: true, arenaId
+      }));
+    });
     const bossHp = Math.max(3, Math.ceil((4 + stageIndex) * difficulty.bossHp));
     const boss = {
       id: 'stage-boss', kind: 'boss', x: 3740, y: GROUND_Y - 78, baseY: GROUND_Y - 78,
@@ -117,7 +157,8 @@
       vy: 0, left: 3560, right: 4020, phase: 0, hopTimer: 85,
       hp: bossHp, maxHp: bossHp, alive: true, onGround: false, frozenTimer: 0,
       stunnedTimer: 0, hurtTimer: 0, deathTimer: 0, boss: true,
-      attackTimer: 95 - stageIndex * 5, stageIndex
+      attackTimer: 95 - stageIndex * 5, attackCycle: 0,
+      attackRate: difficulty.bossRate, spreadBonus: difficulty.bossSpread, stageIndex
     };
     enemies.push(boss);
 
@@ -139,6 +180,7 @@
 
     const powerUps = layout.powers.map(([type, x, y]) => ({ type, x, y, w: 30, h: 30, collected: false }));
     const shards = layout.shards.map(([x, y], index) => ({ id: index, x, y, radius: 13, collected: false }));
+    const checkpointX = safeCheckpointX(stageIndex, hazards);
 
     return {
       stageIndex,
@@ -151,7 +193,7 @@
       projectiles: [],
       enemyProjectiles: [],
       finish: { x: 4120, y: 258, w: 28, h: GROUND_Y - 258 },
-      checkpoint: { x: 2040, y: GROUND_Y - 78, w: 26, h: 78, reached: false },
+      checkpoint: { x: checkpointX, y: GROUND_Y - 78, w: 26, h: 78, reached: false, safeRadius: 90 },
       gateOpen: false
     };
   }

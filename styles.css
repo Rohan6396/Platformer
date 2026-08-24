@@ -85,6 +85,14 @@ button { cursor: pointer; }
   font-size: clamp(0.72rem, 2.5vw, 0.9rem);
 }
 
+.fan-note {
+  width: min(960px, 100%);
+  margin: 5px auto 0;
+  color: #71849a;
+  text-align: center;
+  font-size: clamp(0.62rem, 2vw, 0.72rem);
+}
+
 #touch-controls { display: none; }
 
 .touch-cluster { display: flex; gap: 10px; align-items: end; }
@@ -162,7 +170,7 @@ body.high-contrast #game-shell { border-color: #fff; box-shadow: 0 0 0 3px #000,
     pointer-events: none;
   }
   .touch-key { pointer-events: auto; }
-  #game-help { padding-inline: 8px; }
+  #game-help, .fan-note { padding-inline: 8px; }
   .keybind-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 

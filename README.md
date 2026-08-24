@@ -1,15 +1,17 @@
 # Skybound Circuit DX
 
-Skybound Circuit DX is a one- or two-player arcade platformer that runs directly in the browser. Race through six themed stages, defeat a different guardian in each world, collect hidden sky shards, and unlock new pilots.
+Skybound Circuit DX is an unofficial Star Wars-inspired fan platformer for one or two players that runs directly in the browser. Race through six themed stages, break Imperial blockades, master the light or dark side of the Force, defeat a different guardian in each world, and unlock new pilots.
+
+This is an unofficial, non-commercial fan project. It is not affiliated with or endorsed by Lucasfilm or Disney.
 
 ## What is included
 
-- Six distinct worlds with their own palettes, platform layouts, hazards, weather, stories, and bosses
+- Six distinct worlds with longer par times, two mandatory Imperial combat blockades per stage, hazards, secrets, weather, and bosses
 - Solo play and local co-op, including partner rescue bubbles and a fair finish countdown
-- Always-available melee combat plus blaster, frost, prism, storm, gale, and shield abilities
-- Coyote time, jump buffering, variable jump height, checkpoints, hit feedback, and camera smoothing
+- Always-available vibroblade combat plus blaster, carbonite pulse, lightsaber, Force lightning, Force push, and deflector shield abilities
+- Coyote time, jump buffering, variable jump height, hazard-safe checkpoints, hit feedback, and camera smoothing
 - Persistent stage unlocks, pilots, shards, scores, times, and grades using local storage
-- Explorer, Arcade, and Overdrive difficulties
+- Explorer, Arcade, and Overdrive difficulties with scaling enemy health, faster attacks, boss volleys, and ground shockwaves
 - Keyboard remapping, gamepad support, touch controls, fullscreen, sound controls, reduced motion, and high contrast
 - Responsive presentation for desktop, tablet, and phone screens
 - Synthesized music and sound effects with no audio downloads
