@@ -57,6 +57,7 @@ function setup() {
 }
 
 function installGameEvents() {
+  window.addEventListener('game-key-command', (event) => handleSceneCommand(event.detail?.code));
   window.addEventListener('game-settings-changed', (event) => {
     const previousDifficulty = settings.difficulty;
     settings = event.detail;
@@ -1996,44 +1997,46 @@ function mousePressed() {
   return false;
 }
 
-function keyPressed() {
-  if (document.getElementById('settings-dialog')?.open) return true;
+function handleSceneCommand(code) {
   if (scene === 'menu') {
-    if (key === '1') { gameMode = 'single'; loadPreview(); }
-    else if (key === '2') { gameMode = 'co-op'; loadPreview(); }
-    else if (key === 'q' || key === 'Q' || keyCode === LEFT_ARROW) changeStage(-1);
-    else if (key === 'e' || key === 'E' || keyCode === RIGHT_ARROW) changeStage(1);
-    else if (key === 'c' || key === 'C') cycleCharacter();
-    else if (keyCode === ENTER) startRun();
-    return false;
+    if (code === 'Digit1') { gameMode = 'single'; loadPreview(); }
+    else if (code === 'Digit2') { gameMode = 'co-op'; loadPreview(); }
+    else if (code === 'KeyQ' || code === 'ArrowLeft') changeStage(-1);
+    else if (code === 'KeyE' || code === 'ArrowRight') changeStage(1);
+    else if (code === 'KeyC') cycleCharacter();
+    else if (code === 'Enter') startRun();
+    return;
   }
   if (scene === 'playing') {
-    if (key === 'p' || key === 'P' || keyCode === ESCAPE) togglePause();
-    return false;
+    if (code === 'KeyP' || code === 'Escape') togglePause();
+    return;
   }
   if (scene === 'pause') {
-    if (key === 'p' || key === 'P' || keyCode === ESCAPE) togglePause();
-    else if (key === 'r' || key === 'R') retryFromCheckpoint();
-    else if (key === 'm' || key === 'M') returnToMenu();
-    return false;
+    if (code === 'KeyP' || code === 'Escape') togglePause();
+    else if (code === 'KeyR') retryFromCheckpoint();
+    else if (code === 'KeyM') returnToMenu();
+    return;
   }
   if (scene === 'choice') {
-    if (keyCode === LEFT_ARROW || key === 'a' || key === 'A') pendingChoice.selected = 'storm';
-    else if (keyCode === RIGHT_ARROW || key === 'd' || key === 'D') pendingChoice.selected = 'gale';
-    else if (keyCode === ENTER || key === ' ') chooseAspect(pendingChoice.selected);
-    return false;
+    if (code === 'ArrowLeft' || code === 'KeyA') pendingChoice.selected = 'storm';
+    else if (code === 'ArrowRight' || code === 'KeyD') pendingChoice.selected = 'gale';
+    else if (code === 'Enter' || code === 'Space') chooseAspect(pendingChoice.selected);
+    return;
   }
   if (scene === 'gameover') {
-    if (key === 'r' || key === 'R' || keyCode === ENTER) retryFromCheckpoint();
-    else if (key === 'm' || key === 'M') returnToMenu();
-    return false;
+    if (code === 'KeyR' || code === 'Enter') retryFromCheckpoint();
+    else if (code === 'KeyM') returnToMenu();
+    return;
   }
   if (scene === 'win') {
-    if (key === 'r' || key === 'R') startRun();
-    else if (key === 'm' || key === 'M') returnToMenu();
-    else if (keyCode === ENTER) advanceAfterWin();
-    return false;
+    if (code === 'KeyR') startRun();
+    else if (code === 'KeyM') returnToMenu();
+    else if (code === 'Enter') advanceAfterWin();
   }
+}
+
+function keyPressed() {
+  if (document.getElementById('settings-dialog')?.open) return true;
   return false;
 }
 

@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const MUSIC_URL = 'assets/audio/platformer-stage1.mp3?v=2.2.2';
+  const MUSIC_URL = 'assets/audio/platformer-stage1.mp3?v=2.2.3';
   let context = null;
   let master = null;
   let started = false;
