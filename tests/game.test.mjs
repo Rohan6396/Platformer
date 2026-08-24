@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import test from 'node:test';
@@ -90,8 +91,8 @@ test('page exposes responsive, touch, settings, and accessible controls', async 
   const input = await source('src/input.js');
   const sketch = await source('sketch.js');
   assert.match(html, /p5@2\.3\.1/);
-  assert.match(html, /sketch\.js\?v=2\.1\.2/);
-  assert.match(html, /styles\.css\?v=2\.1\.2/);
+  assert.match(html, /sketch\.js\?v=2\.2\.0/);
+  assert.match(html, /styles\.css\?v=2\.2\.0/);
   assert.match(html, /id="touch-controls"/);
   assert.match(html, /aria-live="polite"/);
   assert.match(html, /id="settings-dialog"/);
@@ -128,6 +129,8 @@ test('difficulty and volume controls update settings, labels, and audio preview'
     'volume-value': fakeElement(),
     'music-status': fakeElement(),
     'music-test': fakeElement(),
+    'sfx-status': fakeElement(),
+    'sfx-test': fakeElement(),
     'reduced-motion': fakeElement(),
     'high-contrast': fakeElement(),
     'reset-progress': fakeElement()
@@ -189,6 +192,10 @@ test('difficulty and volume controls update settings, labels, and audio preview'
 
   elements['music-test'].dispatch('click');
   assert.ok(dispatched.some((event) => event.type === 'game-audio-test'));
+  elements['sfx-test'].dispatch('click');
+  assert.ok(dispatched.some((event) => event.type === 'game-sfx-test'));
+  windowListeners['game-sfx-played'][0]({ detail: 'zap' });
+  assert.equal(elements['sfx-status'].textContent, 'Lightning played');
 });
 
 test('public-facing copy restores its Star Wars fan identity and disclaimer', async () => {
@@ -203,6 +210,15 @@ test('public-facing copy restores its Star Wars fan identity and disclaimer', as
   assert.match(combined, /Force/i);
   assert.match(combined, /unofficial/i);
   assert.match(combined, /not affiliated/i);
+});
+
+test('dark-side attacks sustain visible branching Force lightning while held', async () => {
+  const sketch = await source('sketch.js');
+  assert.match(sketch, /player\.powers\.storm > 0 && player\.attackCooldown <= 0/);
+  assert.match(sketch, /player\.stormTargets =/);
+  assert.match(sketch, /function drawForceEffects\(\)/);
+  assert.match(sketch, /function drawLightningBolt\(start, target, boltIndex\)/);
+  assert.match(sketch, /GameAudio\.sfx\('zap'\)/);
 });
 
 test('taking damage does not leave the player permanently crouched', async () => {
@@ -361,10 +377,11 @@ test('Enter on the win screen immediately starts the next unlocked stage', async
   assert.equal(context.savedStage, 1);
 });
 
-test('music uses a continuous generated media loop with visible playback status', async () => {
+test('music uses the existing CC0 Ogg track as a continuous media loop', async () => {
   const mediaInstances = [];
   const listeners = {};
   const statuses = [];
+  const playedEffects = [];
   class FakeAudio {
     constructor() {
       this.paused = true;
@@ -387,9 +404,12 @@ test('music uses a continuous generated media loop with visible playback status'
     window: {
       Audio: FakeAudio,
       Blob: class FakeBlob { constructor(parts, options) { this.parts = parts; this.type = options.type; } },
-      URL: { createObjectURL: () => 'blob:music', revokeObjectURL() {} },
+      URL: { createObjectURL: () => 'blob:sfx', revokeObjectURL() {} },
       addEventListener: (type, listener) => { listeners[type] = listener; },
-      dispatchEvent: (event) => { if (event.type === 'game-audio-status') statuses.push(event.detail); }
+      dispatchEvent: (event) => {
+        if (event.type === 'game-audio-status') statuses.push(event.detail);
+        if (event.type === 'game-sfx-played') playedEffects.push(event.detail);
+      }
     },
     CustomEvent: class CustomEvent {
       constructor(type, options = {}) { this.type = type; this.detail = options.detail; }
@@ -406,18 +426,25 @@ test('music uses a continuous generated media loop with visible playback status'
   await Promise.resolve();
   assert.equal(mediaInstances.length, 1);
   assert.equal(mediaInstances[0].loop, true);
+  assert.equal(mediaInstances[0].src, 'assets/audio/overworld-theme.ogg?v=2.2.0');
   assert.equal(mediaInstances[0].playCalls, 1);
   assert.ok(statuses.includes('Playing'));
 
   audio.applySettings({ muted: false, volume: 0.5 });
-  assert.equal(mediaInstances[0].volume, 0.36);
+  assert.equal(mediaInstances[0].volume, 0.29);
   mediaInstances[0].paused = true;
   listeners['game-audio-test']();
   await Promise.resolve();
   assert.ok(mediaInstances[0].playCalls >= 2);
+
+  listeners['game-sfx-test']();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(mediaInstances.length, 4, 'lightning uses a three-voice HTML media pool');
+  assert.ok(playedEffects.includes('zap'));
 });
 
-test('music resumes from a suspended browser audio context and schedules notes', async () => {
+test('sound effects resume a suspended browser audio context instead of being dropped', async () => {
   const instances = [];
   const gainNodes = [];
   const parameter = () => ({
@@ -472,13 +499,12 @@ test('music resumes from a suspended browser audio context and schedules notes',
   vm.runInContext(await source('src/audio.js'), context, { filename: 'audio.js' });
   context.GameAudio = context.window.GameAudio;
 
-  assert.equal(context.GameAudio.start(), true);
+  assert.equal(context.GameAudio.sfx('menu'), true);
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
-  context.GameAudio.updateMusic(0, true);
   assert.equal(instances[0].resumeCalls, 1);
-  assert.ok(instances[0].oscillatorStarts >= 2);
+  assert.ok(instances[0].oscillatorStarts >= 1);
 
   context.GameAudio.applySettings({ muted: false, volume: 0.2 });
   assert.equal(gainNodes[0].gain.targets.at(-1).value, 0.2);
@@ -493,4 +519,15 @@ test('music resumes from a suspended browser audio context and schedules notes',
   await Promise.resolve();
   await Promise.resolve();
   assert.equal(instances[0].resumeCalls, 2);
+});
+
+test('bundled soundtrack retains its CC0 source and checksum provenance', async () => {
+  const audio = await readFile(resolve(root, 'assets/audio/overworld-theme.ogg'));
+  const provenance = await source('assets/audio/README.md');
+  assert.equal(audio.subarray(0, 4).toString('ascii'), 'OggS');
+  assert.ok(audio.length > 500_000);
+  assert.equal(createHash('sha256').update(audio).digest('hex'), '74c88ad5407f40528aa8b97d76b76bd04de39dbbc553cbef200284c879a4cb4a');
+  assert.match(provenance, /Louswan/);
+  assert.match(provenance, /CC0 1\.0 Universal/);
+  assert.match(provenance, /74c88ad5407f40528aa8b97d76b76bd04de39dbbc553cbef200284c879a4cb4a/);
 });

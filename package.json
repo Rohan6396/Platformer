@@ -1,6 +1,6 @@
 {
   "name": "skybound-circuit-dx",
-  "version": "2.1.2",
+  "version": "2.2.0",
   "private": true,
   "description": "A responsive one- or two-player arcade platformer built with p5.js.",
   "scripts": {

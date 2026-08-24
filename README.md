@@ -14,7 +14,11 @@ This is an unofficial, non-commercial fan project. It is not affiliated with or 
 - Explorer, Arcade, and Overdrive difficulties with scaling enemy health, faster attacks, boss volleys, and ground shockwaves
 - Keyboard remapping, gamepad support, touch controls, fullscreen, sound controls, reduced motion, and high contrast
 - Responsive presentation for desktop, tablet, and phone screens
-- Synthesized music and sound effects with no audio downloads
+- Existing CC0 chiptune soundtrack plus synthesized arcade and Force-power sound effects
+
+## Audio credits
+
+The soundtrack is the alternate version of [“Overworld Theme” by Louswan](https://opengameart.org/content/overworld-theme-0), released under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/). Attribution is not required by CC0, but the source and file checksum are retained in `assets/audio/README.md` for provenance.
 
 ## Play
 
