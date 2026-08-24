@@ -34,14 +34,54 @@ test('ships six distinct stages with bosses and three shards each', async () => 
   });
 });
 
+test('every stage contains two mandatory Imperial combat blockades', async () => {
+  const game = await gameContext();
+  game.GameConfig.stages.forEach((_stage, index) => {
+    const world = game.GameLevels.createStage(index, 'normal');
+    const gates = world.solids.filter((solid) => solid.arenaGate);
+    const elites = world.enemies.filter((enemy) => enemy.elite);
+    assert.equal(gates.length, 2);
+    assert.equal(elites.length, 4);
+    gates.forEach((gate) => {
+      assert.ok(gate.y <= 72, 'combat gates must be too tall to jump over');
+      assert.equal(elites.filter((enemy) => enemy.arenaId === gate.arenaGate).length, 2);
+    });
+  });
+});
+
+test('checkpoint spawn corridors are clear of every damaging hazard', async () => {
+  const game = await gameContext();
+  game.GameConfig.stages.forEach((_stage, index) => {
+    const world = game.GameLevels.createStage(index, 'normal');
+    const checkpoint = world.checkpoint;
+    const spawnLeft = checkpoint.x + 42;
+    const spawnRight = checkpoint.x + 138;
+    world.hazards.filter((hazard) => hazard.type !== 'vent').forEach((hazard) => {
+      const separated = spawnRight + checkpoint.safeRadius < hazard.x ||
+        spawnLeft - checkpoint.safeRadius > hazard.x + hazard.w;
+      assert.ok(separated, `stage ${index + 1} checkpoint overlaps ${hazard.type} safety radius`);
+    });
+    world.solids.filter((solid) => solid.arenaGate).forEach((gate) => {
+      const separated = spawnRight < gate.x || spawnLeft > gate.x + gate.w;
+      assert.ok(separated, `stage ${index + 1} checkpoint spawn overlaps an Imperial gate`);
+    });
+  });
+});
+
 test('difficulty changes the generated challenge', async () => {
   const game = await gameContext();
   const explorer = game.GameLevels.createStage(5, 'easy');
   const overdrive = game.GameLevels.createStage(5, 'hard');
   const easyBoss = explorer.enemies.find((enemy) => enemy.boss);
   const hardBoss = overdrive.enemies.find((enemy) => enemy.boss);
+  const earlyEnemy = game.GameLevels.createStage(0, 'normal').enemies.find((enemy) => !enemy.boss && !enemy.elite);
+  const lateEnemy = game.GameLevels.createStage(5, 'normal').enemies.find((enemy) => !enemy.boss && !enemy.elite);
   assert.ok(hardBoss.hp > easyBoss.hp);
   assert.ok(Math.abs(hardBoss.baseSpeed) > Math.abs(easyBoss.baseSpeed));
+  assert.ok(hardBoss.attackRate > easyBoss.attackRate);
+  assert.ok(hardBoss.spreadBonus > easyBoss.spreadBonus);
+  assert.ok(lateEnemy.hp > earlyEnemy.hp);
+  assert.ok(game.GameConfig.stages.every((stage) => stage.parTime >= 112));
 });
 
 test('page exposes responsive, touch, settings, and accessible controls', async () => {
@@ -49,8 +89,8 @@ test('page exposes responsive, touch, settings, and accessible controls', async 
   const css = await source('styles.css');
   const input = await source('src/input.js');
   assert.match(html, /p5@2\.3\.1/);
-  assert.match(html, /sketch\.js\?v=2\.0\.3/);
-  assert.match(html, /styles\.css\?v=2\.0\.3/);
+  assert.match(html, /sketch\.js\?v=2\.1\.0/);
+  assert.match(html, /styles\.css\?v=2\.1\.0/);
   assert.match(html, /id="touch-controls"/);
   assert.match(html, /aria-live="polite"/);
   assert.match(html, /id="settings-dialog"/);
@@ -59,12 +99,18 @@ test('page exposes responsive, touch, settings, and accessible controls', async 
   assert.match(input, /requestFullscreen/);
 });
 
-test('public-facing copy uses the original Skybound Circuit identity', async () => {
+test('public-facing copy restores its Star Wars fan identity and disclaimer', async () => {
   const combined = await Promise.all([
     'index.html', 'sketch.js', 'src/config.js', 'src/levels.js'
   ].map(source)).then((parts) => parts.join('\n'));
-  assert.doesNotMatch(combined, /Star Wars|lightsaber|dark side|light side|the Force/i);
   assert.match(combined, /Skybound Circuit DX/i);
+  assert.match(combined, /Star Wars/i);
+  assert.match(combined, /lightsaber/i);
+  assert.match(combined, /dark side/i);
+  assert.match(combined, /light side/i);
+  assert.match(combined, /Force/i);
+  assert.match(combined, /unofficial/i);
+  assert.match(combined, /not affiliated/i);
 });
 
 test('taking damage does not leave the player permanently crouched', async () => {
@@ -107,6 +153,49 @@ test('taking damage does not leave the player permanently crouched', async () =>
   };
   vm.runInContext('updatePlayerSize(crouchingPlayer, true)', context);
   assert.equal(context.crouchingPlayer.crouching, true);
+});
+
+test('Imperial gates unlock after their guards fall and bosses launch shockwaves', async () => {
+  const context = vm.createContext({
+    window: { addEventListener() {} },
+    document: {},
+    navigator: {},
+    console,
+    max: Math.max
+  });
+  vm.runInContext(await source('src/config.js'), context, { filename: 'config.js' });
+  context.GameConfig = context.window.GameConfig;
+  context.GameStorage = {
+    loadSettings: () => ({ ...context.GameConfig.defaultSettings }),
+    loadProgress: () => ({ unlockedStages: 1, selectedStage: 0, selectedCharacter: 0 })
+  };
+  vm.runInContext(await source('sketch.js'), context, { filename: 'sketch.js' });
+  vm.runInContext(`
+    world = {
+      gateOpen: false,
+      enemies: [{ alive: true, arenaId: 'blockade-1' }],
+      enemyProjectiles: []
+    };
+    window.testGate = { kind: 'gate', arenaGate: 'blockade-1' };
+    window.gateLocked = activeSolid(window.testGate);
+    world.enemies[0].alive = false;
+    window.gateUnlocked = !activeSolid(window.testGate);
+
+    selectedStage = 5;
+    players = [{ active: true, alive: true, x: 3500, y: 370, w: 32, h: 44 }];
+    spawnBurst = () => {};
+    GameAudio = { sfx() {} };
+    window.testBoss = {
+      x: 3740, y: 360, w: 78, h: 78, frozenTimer: 0,
+      attackTimer: 0, attackCycle: 2, attackRate: 1.4, spreadBonus: 1
+    };
+    updateBossAttack(window.testBoss, 1);
+    window.projectileKinds = world.enemyProjectiles.map((projectile) => projectile.kind);
+  `, context);
+  assert.equal(context.window.gateLocked, true);
+  assert.equal(context.window.gateUnlocked, true);
+  assert.ok(context.window.projectileKinds.filter((kind) => kind === 'bolt').length >= 4, JSON.stringify(context.window.projectileKinds));
+  assert.equal(context.window.projectileKinds.filter((kind) => kind === 'shockwave').length, 2);
 });
 
 test('Enter on the win screen immediately starts the next unlocked stage', async () => {

@@ -288,7 +288,11 @@ function jumpPlayer(player) {
 }
 
 function activeSolid(solid) {
-  return !(solid.bossGate && world.gateOpen);
+  if (solid.bossGate && world.gateOpen) return false;
+  if (solid.arenaGate) {
+    return world.enemies.some((enemy) => enemy.alive && enemy.arenaId === solid.arenaGate);
+  }
+  return true;
 }
 
 function collidePlayerWithSolids(player, axis) {
@@ -473,12 +477,35 @@ function updateBossAttack(boss, step) {
   if (!target) return;
   const dx = target.x + target.w / 2 - (boss.x + boss.w / 2);
   const dy = target.y + target.h / 2 - (boss.y + boss.h / 2);
-  const length = max(1, Math.hypot(dx, dy));
-  const speed = 4.6 + selectedStage * 0.22;
-  world.enemyProjectiles.push({ x: boss.x + boss.w / 2, y: boss.y + boss.h / 2, vx: dx / length * speed, vy: dy / length * speed, radius: 10 + selectedStage, life: 180 });
-  boss.attackTimer = max(52, 96 - selectedStage * 7);
-  spawnBurst(boss.x + boss.w / 2, boss.y + boss.h / 2, CFG.stages[selectedStage].palette.hazard, 12, 4);
+  const baseAngle = Math.atan2(dy, dx);
+  const speed = 5 + selectedStage * 0.28;
+  const shotCount = 1 + Math.floor(selectedStage / 2) + (boss.spreadBonus || 0);
+  const spread = 0.18;
+  for (let index = 0; index < shotCount; index++) {
+    const offset = (index - (shotCount - 1) / 2) * spread;
+    launchBossProjectile(boss, baseAngle + offset, speed, 9 + selectedStage * 0.75, 'bolt');
+  }
+  if (boss.attackCycle % 3 === 2) {
+    const waveSpeed = 5.8 + selectedStage * 0.3;
+    world.enemyProjectiles.push({ x: boss.x + boss.w / 2, y: GROUND - 14, vx: -waveSpeed, vy: 0, radius: 14, life: 210, kind: 'shockwave' });
+    world.enemyProjectiles.push({ x: boss.x + boss.w / 2, y: GROUND - 14, vx: waveSpeed, vy: 0, radius: 14, life: 210, kind: 'shockwave' });
+  }
+  boss.attackCycle++;
+  boss.attackTimer = max(36, (94 - selectedStage * 6) / (boss.attackRate || 1));
+  spawnBurst(boss.x + boss.w / 2, boss.y + boss.h / 2, CFG.stages[selectedStage].palette.hazard, 16, 4.8);
   GameAudio.sfx('boss');
+}
+
+function launchBossProjectile(boss, angle, speed, radius, kind) {
+  world.enemyProjectiles.push({
+    x: boss.x + boss.w / 2,
+    y: boss.y + boss.h / 2,
+    vx: Math.cos(angle) * speed,
+    vy: Math.sin(angle) * speed,
+    radius,
+    life: 190,
+    kind
+  });
 }
 
 function damageEnemy(enemy, amount, owner, style) {
@@ -497,7 +524,12 @@ function damageEnemy(enemy, amount, owner, style) {
   enemy.deathTimer = enemy.boss ? 90 : 28;
   enemy.vx = 0;
   enemy.vy = 0;
-  if (owner) owner.score += enemy.boss ? 800 : style === 'basic' ? 75 : 95;
+  if (owner) owner.score += enemy.boss ? 800 : enemy.elite ? 180 : style === 'basic' ? 75 : 95;
+  if (enemy.arenaId && !world.enemies.some((other) => other.alive && other.arenaId === enemy.arenaId)) {
+    const gateNumber = Number(enemy.arenaId.split('-').pop());
+    GameAudio.sfx('gate');
+    showMessage(`Imperial blockade ${gateNumber} cleared. The energy gate is down!`);
+  }
   if (enemy.boss) {
     world.gateOpen = true;
     stageStats.bossDefeated = true;
@@ -546,7 +578,8 @@ function updateProjectiles(step) {
     projectile.y += projectile.vy * step;
     let remove = projectile.life <= 0 || projectile.x < 0 || projectile.x > CFG.STAGE_WIDTH || projectile.y < 0 || projectile.y > H;
     for (const solid of world.solids) {
-      if (!remove && activeSolid(solid) && circleRectOverlap(projectile.x, projectile.y, projectile.radius, solid)) {
+      const travelsAlongGround = projectile.kind === 'shockwave' && solid.kind === 'ground';
+      if (!remove && !travelsAlongGround && activeSolid(solid) && circleRectOverlap(projectile.x, projectile.y, projectile.radius, solid)) {
         remove = true;
       }
     }
@@ -714,23 +747,23 @@ function collectItems() {
 function applyPowerUp(player, type) {
   if (type === 'shield') {
     player.powers.shield = 60 * 10;
-    showMessage(`${player.name} activated a ten-second impact shield.`);
+    showMessage(`${player.name} activated a ten-second deflector shield.`);
   } else if (type === 'blaster') {
     player.powers.blaster = 60 * 16;
     player.shotMode = 'blaster';
-    showMessage(`${player.name} equipped Ember Bolts.`);
+    showMessage(`${player.name} equipped a rapid-fire blaster.`);
   } else if (type === 'frost') {
     player.powers.frost = 60 * 16;
     player.shotMode = 'frost';
-    showMessage(`${player.name} equipped Frost Pulses.`);
+    showMessage(`${player.name} equipped a carbonite pulse.`);
   } else if (type === 'prism') {
     player.powers.prism = 60 * 14;
-    showMessage(`${player.name} drew the Prism Blade.`);
+    showMessage(`${player.name} ignited a lightsaber.`);
   } else if (type === 'aspect') {
     pendingChoice = { playerId: player.id, selected: selectedPath };
     scene = 'choice';
     GameInput.clear();
-    showMessage(`${player.name} found an Aspect Core. Choose Storm or Gale.`);
+    showMessage(`${player.name} found a Force holocron. Choose the dark side or light side.`);
   }
 }
 
@@ -747,7 +780,7 @@ function chooseAspect(path) {
   pendingChoice = null;
   scene = 'playing';
   GameInput.clear();
-  showMessage(path === 'storm' ? `${player.name} chose Storm: rapid chain lightning.` : `${player.name} chose Gale: wide knockback waves and bonus energy.`);
+  showMessage(path === 'storm' ? `${player.name} chose the dark side: rapid Force lightning.` : `${player.name} chose the light side: Force push and bonus energy.`);
 }
 
 function powerColor(type) {
@@ -1142,6 +1175,18 @@ function drawGate(gate, theme) {
   for (let y = gate.y + 12; y < gate.y + gate.h - 8; y += 28) rect(gate.x + 5, y, gate.w - 10, 11, 4);
   fill(255, 255, 255, 170);
   circle(gate.x + gate.w / 2, gate.y + 22, 7);
+  if (gate.arenaGate) {
+    fill(255, 255, 255, 185);
+    textAlign(CENTER, CENTER);
+    textStyle(BOLD);
+    textSize(9);
+    push();
+    translate(gate.x + gate.w / 2, gate.y + gate.h / 2);
+    rotate(-HALF_PI);
+    text('IMPERIAL LOCK', 0, 0);
+    pop();
+    textStyle(NORMAL);
+  }
 }
 
 function drawHazards(theme) {
@@ -1214,7 +1259,7 @@ function drawShards(theme) {
 }
 
 function drawPowerUps() {
-  const labels = { shield: 'S', blaster: 'E', frost: 'F', prism: 'P', aspect: 'A' };
+  const labels = { shield: 'S', blaster: 'B', frost: 'C', prism: 'L', aspect: 'F' };
   for (const powerUp of world.powerUps) {
     if (powerUp.collected || !worldRectVisible(powerUp, 90)) continue;
     const bob = settings.reducedMotion ? 0 : sin(gameFrame * 0.07 + powerUp.x) * 5;
@@ -1274,6 +1319,12 @@ function drawEnemies(theme) {
       scale(1 + (1 - scaleValue) * 0.8, scaleValue);
       drawingContext.globalAlpha = scaleValue;
     }
+    if (enemy.elite && enemy.alive) {
+      noFill();
+      stroke(color(theme.palette.accent));
+      strokeWeight(2.5);
+      circle(0, 0, max(enemy.w, enemy.h) + 13 + sin(gameFrame * 0.1 + enemy.phase) * 3);
+    }
     noStroke();
     if (enemy.frozenTimer > 0) fill('#a9ecff');
     else if (enemy.boss) fill(color(theme.palette.hazard));
@@ -1327,13 +1378,13 @@ function drawEnemies(theme) {
     drawingContext.globalAlpha = 1;
     pop();
 
-    if (enemy.boss && enemy.alive) {
-      const barW = 86;
+    if (enemy.alive && enemy.maxHp > 1) {
+      const barW = enemy.boss ? 86 : enemy.w + 10;
       noStroke();
       fill(0, 0, 0, 155);
-      rect(enemy.x - 4, enemy.y - 18, barW, 8, 4);
-      fill(color(theme.palette.hazard));
-      rect(enemy.x - 4, enemy.y - 18, barW * enemy.hp / enemy.maxHp, 8, 4);
+      rect(enemy.x + enemy.w / 2 - barW / 2, enemy.y - 18, barW, 8, 4);
+      fill(enemy.elite ? color(theme.palette.accent) : color(theme.palette.hazard));
+      rect(enemy.x + enemy.w / 2 - barW / 2, enemy.y - 18, barW * enemy.hp / enemy.maxHp, 8, 4);
     }
   }
 }
@@ -1348,7 +1399,9 @@ function drawProjectiles(theme) {
   });
   world.enemyProjectiles.forEach((projectile) => {
     fill(color(theme.palette.hazard));
-    circle(projectile.x, projectile.y, projectile.radius * 2);
+    if (projectile.kind === 'shockwave') {
+      ellipse(projectile.x, projectile.y, projectile.radius * 2.5, projectile.radius * 1.25);
+    } else circle(projectile.x, projectile.y, projectile.radius * 2);
     noFill();
     stroke(255, 255, 255, 115);
     strokeWeight(2);
@@ -1462,8 +1515,9 @@ function drawHUD(theme) {
   text(`Time ${formatTime(runTime)}  ·  Par ${formatTime(theme.parTime)}`, W - 334, 49);
   fill(220, 232, 244);
   text(`Shards ${collectedShardCount()}/3  ·  Score ${runScore()}`, W - 334, 73);
+  const lockedBlockades = world.solids.filter((solid) => solid.arenaGate && activeSolid(solid)).length;
   fill(world.gateOpen ? color(theme.palette.accent) : color(theme.palette.hazard));
-  text(world.gateOpen ? 'EXIT OPEN' : `Boss: ${theme.bossName}`, W - 334, 95);
+  text(lockedBlockades > 0 ? `Imperial locks: ${2 - lockedBlockades}/2` : world.gateOpen ? 'EXIT OPEN' : `Boss: ${theme.bossName}`, W - 334, 95);
 
   const boss = world.enemies.find((enemy) => enemy.boss && enemy.alive);
   if (boss && boss.x < cameraX + W + 250 && boss.x > cameraX - 250) drawBossBar(boss, theme);
@@ -1502,18 +1556,18 @@ function drawPlayerPanel(player, x, y, panelW, theme) {
   textSize(14);
   text(`Coins ${player.coins}  ·  Score ${player.score}`, x + 14, y + 72);
   const power = currentPowerLabel(player);
-  fill(power === 'Basic pulse' ? color(190, 205, 220) : color(theme.palette.accent));
+  fill(power === 'Vibroblade' ? color(190, 205, 220) : color(theme.palette.accent));
   text(power, x + 14, y + 91);
 }
 
 function currentPowerLabel(player) {
-  if (player.powers.storm > 0) return `Storm ${ceil(player.powers.storm / 60)}s`;
-  if (player.powers.gale > 0) return `Gale ${ceil(player.powers.gale / 60)}s`;
-  if (player.powers.prism > 0) return `Prism Blade ${ceil(player.powers.prism / 60)}s`;
-  if (player.shotMode === 'frost' && player.powers.frost > 0) return `Frost Pulse ${ceil(player.powers.frost / 60)}s`;
-  if (player.powers.blaster > 0) return `Ember Bolt ${ceil(player.powers.blaster / 60)}s`;
-  if (player.powers.frost > 0) return `Frost Pulse ${ceil(player.powers.frost / 60)}s`;
-  return 'Basic pulse';
+  if (player.powers.storm > 0) return `Dark Side · Lightning ${ceil(player.powers.storm / 60)}s`;
+  if (player.powers.gale > 0) return `Light Side · Force Push ${ceil(player.powers.gale / 60)}s`;
+  if (player.powers.prism > 0) return `Lightsaber ${ceil(player.powers.prism / 60)}s`;
+  if (player.shotMode === 'frost' && player.powers.frost > 0) return `Carbonite Pulse ${ceil(player.powers.frost / 60)}s`;
+  if (player.powers.blaster > 0) return `Blaster ${ceil(player.powers.blaster / 60)}s`;
+  if (player.powers.frost > 0) return `Carbonite Pulse ${ceil(player.powers.frost / 60)}s`;
+  return 'Vibroblade';
 }
 
 function drawBossBar(boss, theme) {
@@ -1541,8 +1595,8 @@ function buildMenuButtons() {
 
 function buildChoiceButtons() {
   choiceButtons = [
-    { action: 'storm', x: 190, y: 310, w: 250, h: 92, label: 'STORM' },
-    { action: 'gale', x: 520, y: 310, w: 250, h: 92, label: 'GALE' }
+    { action: 'storm', x: 190, y: 310, w: 250, h: 92, label: 'DARK SIDE' },
+    { action: 'gale', x: 520, y: 310, w: 250, h: 92, label: 'LIGHT SIDE' }
   ];
 }
 
@@ -1567,7 +1621,7 @@ function drawMenu(theme) {
   textStyle(NORMAL);
   fill(190, 211, 229);
   textSize(14);
-  text('Six worlds · four pilots · one last relay', W / 2, 94);
+  text('Six worlds · choose your Force path · unofficial fan project', W / 2, 94);
 
   fill(255);
   textStyle(BOLD);
@@ -1672,7 +1726,7 @@ function drawPauseOverlay() {
 
 function drawChoiceOverlay() {
   const player = players[pendingChoice.playerId];
-  drawOverlayBase('CHOOSE AN ASPECT', `${player.name} found a rare core. Use ← / → and Enter, or tap a path.`);
+  drawOverlayBase('CHOOSE YOUR FORCE PATH', `${player.name} found a holocron. Use ← / → and Enter, or tap a path.`);
   const theme = CFG.stages[selectedStage];
   choiceButtons.forEach((button) => {
     const selected = pendingChoice.selected === button.action;
@@ -1680,13 +1734,13 @@ function drawChoiceOverlay() {
     fill(190, 214, 230);
     textAlign(CENTER, TOP);
     textSize(13);
-    const description = button.action === 'storm' ? 'Rapid lightning · aggressive score play' : 'Wide push wave · bonus energy';
+    const description = button.action === 'storm' ? 'Force lightning · aggressive score play' : 'Force push · bonus energy';
     text(description, button.x + button.w / 2, button.y + button.h + 10);
   });
 }
 
 function drawGameOverOverlay() {
-  drawOverlayBase('CIRCUIT DARK', world.checkpoint.reached ? 'R retries from the checkpoint · M returns to stages' : 'R restarts the stage · M returns to stages');
+  drawOverlayBase('THE FORCE FADES', world.checkpoint.reached ? 'R retries from the checkpoint · M returns to stages' : 'R restarts the stage · M returns to stages');
   fill(220);
   textAlign(CENTER, CENTER);
   textSize(16);
