@@ -84,7 +84,7 @@ function installGameEvents() {
       resumeAfterSettings = false;
       scene = 'playing';
       GameInput.clear();
-      GameAudio.start();
+      GameAudio.start(selectedStage);
       showMessage('Settings applied.');
     }
   });
@@ -156,7 +156,7 @@ function startRun() {
   stageStats = { retries: 0, rescuedFinish: false, bossDefeated: false, damageTaken: 0 };
   scene = 'playing';
   GameInput.clear();
-  GameAudio.start();
+  GameAudio.start(selectedStage);
   GameAudio.resetMusic();
   showMessage(`${CFG.stages[selectedStage].name}: ${CFG.stages[selectedStage].story}`);
   document.querySelector('#canvas-mount canvas')?.focus();
@@ -1900,7 +1900,7 @@ function mousePressed() {
 }
 
 function keyPressed() {
-  if (document.getElementById('settings-dialog')?.open) return false;
+  if (document.getElementById('settings-dialog')?.open) return true;
   if (scene === 'menu') {
     if (key === '1') { gameMode = 'single'; loadPreview(); }
     else if (key === '2') { gameMode = 'co-op'; loadPreview(); }
@@ -1940,4 +1940,4 @@ function keyPressed() {
   return false;
 }
 
-function keyReleased() { return false; }
+function keyReleased() { return document.getElementById('settings-dialog')?.open ? true : false; }
