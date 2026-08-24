@@ -506,10 +506,15 @@ function collideEnemyWithSolids(enemy) {
 }
 
 function updateBossAttack(boss, step) {
-  boss.attackTimer -= step;
-  if (boss.attackTimer > 0 || boss.frozenTimer > 0) return;
   const target = livingPlayers().sort((a, b) => Math.abs(a.x - boss.x) - Math.abs(b.x - boss.x))[0];
   if (!target) return;
+  const horizontalDistance = Math.abs((target.x + target.w / 2) - (boss.x + boss.w / 2));
+  if (horizontalDistance > W * 0.78) {
+    boss.attackTimer = max(30, boss.attackTimer);
+    return;
+  }
+  boss.attackTimer -= step;
+  if (boss.attackTimer > 0 || boss.frozenTimer > 0) return;
   const dx = target.x + target.w / 2 - (boss.x + boss.w / 2);
   const dy = target.y + target.h / 2 - (boss.y + boss.h / 2);
   const baseAngle = Math.atan2(dy, dx);
