@@ -33,6 +33,7 @@ let pauseButtons = [];
 let stars = [];
 let motes = [];
 let lastGamepadPause = false;
+let resumeAfterSettings = false;
 
 function setup() {
   const renderer = createCanvas(W, H);
@@ -57,14 +58,34 @@ function setup() {
 
 function installGameEvents() {
   window.addEventListener('game-settings-changed', (event) => {
+    const previousDifficulty = settings.difficulty;
     settings = event.detail;
-    GameAudio.applySettings(settings);
-    showMessage(`Difficulty set to ${CFG.difficulties[settings.difficulty].label}.`);
+    if (previousDifficulty !== settings.difficulty) {
+      if (scene === 'menu') loadPreview();
+      showMessage(`Difficulty set to ${CFG.difficulties[settings.difficulty].label}.`);
+    }
   });
-  window.addEventListener('game-autopause', () => {
+  window.addEventListener('game-autopause', (event) => {
     if (scene === 'playing') {
       scene = 'pause';
+      resumeAfterSettings = event.detail?.source === 'settings';
       showMessage('Auto-paused.');
+    }
+  });
+  window.addEventListener('game-settings-closed', (event) => {
+    const difficultyChanged = Boolean(event.detail?.difficultyChanged);
+    if (difficultyChanged && scene !== 'menu') {
+      resumeAfterSettings = false;
+      startRun();
+      showMessage(`${CFG.difficulties[settings.difficulty].label} difficulty applied. Stage restarted.`);
+      return;
+    }
+    if (resumeAfterSettings && scene === 'pause') {
+      resumeAfterSettings = false;
+      scene = 'playing';
+      GameInput.clear();
+      GameAudio.start();
+      showMessage('Settings applied.');
     }
   });
   window.addEventListener('game-progress-reset', () => {
@@ -82,6 +103,7 @@ function draw() {
   const step = constrain(deltaTime / (1000 / 60), 0.25, 1.8);
   GameInput.pollGamepads();
   handleGamepadPause();
+  GameAudio.updateMusic(selectedStage, scene === 'playing' || scene === 'pause' || scene === 'choice');
 
   if (scene === 'playing' && hitStop <= 0) updateGame(step);
   else if (hitStop > 0) hitStop -= step;
@@ -176,8 +198,7 @@ function runScore() { return activePlayers().reduce((sum, player) => sum + playe
 
 function updateGame(step) {
   gameFrame += step;
-  runTime += deltaTime / 1000;
-  GameAudio.updateMusic(selectedStage, true);
+  runTime += step / 60;
 
   updatePlayerInputs(step);
   activePlayers().forEach((player) => updatePlayer(player, step));
