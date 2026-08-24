@@ -18,7 +18,7 @@ This is an unofficial, non-commercial fan project. It is not affiliated with or 
 
 ## Audio credits
 
-The soundtrack is the alternate version of [“Overworld Theme” by Louswan](https://opengameart.org/content/overworld-theme-0), released under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/). Attribution is not required by CC0, but the source and file checksum are retained in `assets/audio/README.md` for provenance.
+The soundtrack is [“Stage 1” from Platformer Chiptunes by Guy G. Gamerson](https://opengameart.org/content/platformer-chiptunes), released under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/). Attribution is not required by CC0, but the source and file checksum are retained in `assets/audio/README.md` for provenance.
 
 ## Play
 
