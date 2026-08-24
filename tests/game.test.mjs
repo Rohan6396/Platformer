@@ -88,15 +88,91 @@ test('page exposes responsive, touch, settings, and accessible controls', async 
   const html = await source('index.html');
   const css = await source('styles.css');
   const input = await source('src/input.js');
+  const sketch = await source('sketch.js');
   assert.match(html, /p5@2\.3\.1/);
-  assert.match(html, /sketch\.js\?v=2\.1\.0/);
-  assert.match(html, /styles\.css\?v=2\.1\.0/);
+  assert.match(html, /sketch\.js\?v=2\.1\.1/);
+  assert.match(html, /styles\.css\?v=2\.1\.1/);
   assert.match(html, /id="touch-controls"/);
   assert.match(html, /aria-live="polite"/);
   assert.match(html, /id="settings-dialog"/);
   assert.match(css, /pointer: coarse/);
   assert.match(input, /navigator\.getGamepads/);
   assert.match(input, /requestFullscreen/);
+  assert.match(sketch, /runTime \+= step \/ 60/);
+});
+
+test('difficulty and volume controls update settings, labels, and audio preview', async () => {
+  function fakeElement(initial = {}) {
+    const listeners = {};
+    return {
+      value: '', checked: false, textContent: '', dataset: {}, open: false,
+      classList: { add() {}, remove() {}, toggle() {} },
+      addEventListener(type, listener) { (listeners[type] ||= []).push(listener); },
+      dispatch(type) { (listeners[type] || []).forEach((listener) => listener({ preventDefault() {} })); },
+      setAttribute() {}, showModal() { this.open = true; }, close() { this.open = false; this.dispatch('close'); },
+      ...initial
+    };
+  }
+
+  const elements = {
+    'settings-dialog': fakeElement(),
+    'settings-button': fakeElement(),
+    'mute-button': fakeElement(),
+    'fullscreen-button': fakeElement(),
+    'difficulty-select': fakeElement(),
+    'volume-range': fakeElement(),
+    'difficulty-value': fakeElement(),
+    'volume-value': fakeElement(),
+    'reduced-motion': fakeElement(),
+    'high-contrast': fakeElement(),
+    'reset-progress': fakeElement()
+  };
+  const dispatched = [];
+  const saved = [];
+  const context = vm.createContext({
+    window: {
+      addEventListener() {},
+      dispatchEvent: (event) => { dispatched.push(event); }
+    },
+    document: {
+      body: { classList: { toggle() {} } },
+      addEventListener() {},
+      getElementById: (id) => elements[id],
+      querySelectorAll: () => [],
+      querySelector: () => null,
+      fullscreenElement: null
+    },
+    navigator: { getGamepads: () => [] },
+    CustomEvent: class CustomEvent {
+      constructor(type, options = {}) { this.type = type; this.detail = options.detail; }
+    },
+    console
+  });
+  vm.runInContext(await source('src/config.js'), context, { filename: 'config.js' });
+  context.GameConfig = context.window.GameConfig;
+  context.GameStorage = {
+    loadSettings: () => ({ ...context.GameConfig.defaultSettings, muted: true }),
+    saveSettings: (settings) => { saved.push(JSON.parse(JSON.stringify(settings))); },
+    resetProgress() {}
+  };
+  vm.runInContext(await source('src/input.js'), context, { filename: 'input.js' });
+  context.window.GameInput.install();
+
+  elements['difficulty-select'].value = 'hard';
+  elements['difficulty-select'].dispatch('change');
+  const difficultyEvent = dispatched.find((event) => event.type === 'game-settings-changed');
+  assert.equal(context.window.GameInput.getSettings().difficulty, 'hard');
+  assert.equal(elements['difficulty-value'].textContent, 'Overdrive');
+
+  elements['volume-range'].value = '0.25';
+  elements['volume-range'].dispatch('input');
+  assert.equal(context.window.GameInput.getSettings().volume, 0.25);
+  assert.equal(context.window.GameInput.getSettings().muted, false);
+  assert.equal(elements['volume-value'].textContent, '25%');
+  assert.equal(elements['mute-button'].textContent, 'Sound on');
+  assert.ok(dispatched.some((event) => event.type === 'game-audio-preview'));
+  assert.equal(difficultyEvent.detail.volume, 0.65, 'settings events should be immutable snapshots');
+  assert.equal(saved.at(-1).volume, 0.25);
 });
 
 test('public-facing copy restores its Star Wars fan identity and disclaimer', async () => {
@@ -198,6 +274,30 @@ test('Imperial gates unlock after their guards fall and bosses launch shockwaves
   assert.equal(context.window.projectileKinds.filter((kind) => kind === 'shockwave').length, 2);
 });
 
+test('closing settings applies a new difficulty by restarting the active stage', async () => {
+  const listeners = {};
+  const context = vm.createContext({
+    window: { addEventListener: (type, listener) => { listeners[type] = listener; } },
+    document: { getElementById: () => null }, navigator: {}, console
+  });
+  vm.runInContext(await source('src/config.js'), context, { filename: 'config.js' });
+  context.GameConfig = context.window.GameConfig;
+  context.GameStorage = {
+    loadSettings: () => ({ ...context.GameConfig.defaultSettings }),
+    loadProgress: () => ({ unlockedStages: 1, selectedStage: 0, selectedCharacter: 0 })
+  };
+  vm.runInContext(await source('sketch.js'), context, { filename: 'sketch.js' });
+  vm.runInContext(`
+    installGameEvents();
+    scene = 'pause';
+    resumeAfterSettings = true;
+    startRun = () => { window.restartedOnDifficulty = settings.difficulty; };
+  `, context);
+  listeners['game-settings-changed']({ detail: { ...context.GameConfig.defaultSettings, difficulty: 'hard' } });
+  listeners['game-settings-closed']({ detail: { difficultyChanged: true } });
+  assert.equal(context.window.restartedOnDifficulty, 'hard');
+});
+
 test('Enter on the win screen immediately starts the next unlocked stage', async () => {
   const context = vm.createContext({
     window: { addEventListener() {} },
@@ -230,9 +330,11 @@ test('Enter on the win screen immediately starts the next unlocked stage', async
 
 test('music resumes from a suspended browser audio context and schedules notes', async () => {
   const instances = [];
+  const gainNodes = [];
   const parameter = () => ({
+    targets: [],
     cancelScheduledValues() {},
-    setTargetAtTime() {},
+    setTargetAtTime(value, time, constant) { this.targets.push({ value, time, constant }); },
     setValueAtTime() {},
     exponentialRampToValueAtTime() {}
   });
@@ -245,7 +347,11 @@ test('music resumes from a suspended browser audio context and schedules notes',
       this.destination = {};
       instances.push(this);
     }
-    createGain() { return { gain: parameter(), connect() {} }; }
+    createGain() {
+      const node = { gain: parameter(), connect() {} };
+      gainNodes.push(node);
+      return node;
+    }
     createOscillator() {
       return {
         frequency: parameter(),
@@ -284,6 +390,14 @@ test('music resumes from a suspended browser audio context and schedules notes',
   context.GameAudio.updateMusic(0, true);
   assert.equal(instances[0].resumeCalls, 1);
   assert.ok(instances[0].oscillatorStarts >= 2);
+
+  context.GameAudio.applySettings({ muted: false, volume: 0.2 });
+  assert.equal(gainNodes[0].gain.targets.at(-1).value, 0.2);
+  const startsBeforePreview = instances[0].oscillatorStarts;
+  listeners['game-audio-preview']();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.ok(instances[0].oscillatorStarts > startsBeforePreview);
 
   instances[0].state = 'suspended';
   listeners.pointerdown();

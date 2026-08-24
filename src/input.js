@@ -33,9 +33,13 @@
   }
 
   function saveAndNotify() {
-    GameStorage.saveSettings(settings);
+    const snapshot = {
+      ...settings,
+      bindings: settings.bindings.map((binding) => ({ ...binding }))
+    };
+    GameStorage.saveSettings(snapshot);
     document.body.classList.toggle('high-contrast', settings.highContrast);
-    window.dispatchEvent(new CustomEvent('game-settings-changed', { detail: settings }));
+    window.dispatchEvent(new CustomEvent('game-settings-changed', { detail: snapshot }));
   }
 
   function clear() {
@@ -93,12 +97,17 @@
     const fullscreenButton = document.getElementById('fullscreen-button');
     const difficulty = document.getElementById('difficulty-select');
     const volume = document.getElementById('volume-range');
+    const difficultyValue = document.getElementById('difficulty-value');
+    const volumeValue = document.getElementById('volume-value');
     const reducedMotion = document.getElementById('reduced-motion');
     const highContrast = document.getElementById('high-contrast');
+    let openedDifficulty = settings.difficulty;
 
     function syncSettingsUi() {
       difficulty.value = settings.difficulty;
       volume.value = String(settings.volume);
+      difficultyValue.textContent = GameConfig.difficulties[settings.difficulty].label;
+      volumeValue.textContent = `${Math.round(settings.volume * 100)}%`;
       reducedMotion.checked = settings.reducedMotion;
       highContrast.checked = settings.highContrast;
       muteButton.textContent = settings.muted ? 'Sound off' : 'Sound on';
@@ -107,15 +116,19 @@
     }
 
     settingsButton.addEventListener('click', () => {
+      openedDifficulty = settings.difficulty;
       syncSettingsUi();
       clear();
       dialog.showModal();
-      window.dispatchEvent(new CustomEvent('game-autopause'));
+      window.dispatchEvent(new CustomEvent('game-autopause', { detail: { source: 'settings' } }));
     });
 
     dialog.addEventListener('close', () => {
       listeningFor = null;
       updateKeybindLabels();
+      window.dispatchEvent(new CustomEvent('game-settings-closed', {
+        detail: { difficultyChanged: settings.difficulty !== openedDifficulty }
+      }));
       document.querySelector('#canvas-mount canvas')?.focus();
     });
 
@@ -135,8 +148,20 @@
       }
     });
 
-    difficulty.addEventListener('change', () => { settings.difficulty = difficulty.value; saveAndNotify(); });
-    volume.addEventListener('input', () => { settings.volume = Number(volume.value); saveAndNotify(); });
+    difficulty.addEventListener('change', () => {
+      settings.difficulty = difficulty.value;
+      difficultyValue.textContent = GameConfig.difficulties[settings.difficulty].label;
+      saveAndNotify();
+    });
+    volume.addEventListener('input', () => {
+      settings.volume = Number(volume.value);
+      if (settings.volume > 0 && settings.muted) settings.muted = false;
+      volumeValue.textContent = `${Math.round(settings.volume * 100)}%`;
+      muteButton.textContent = settings.muted ? 'Sound off' : 'Sound on';
+      muteButton.setAttribute('aria-pressed', String(settings.muted));
+      saveAndNotify();
+      window.dispatchEvent(new CustomEvent('game-audio-preview'));
+    });
     reducedMotion.addEventListener('change', () => { settings.reducedMotion = reducedMotion.checked; saveAndNotify(); });
     highContrast.addEventListener('change', () => { settings.highContrast = highContrast.checked; saveAndNotify(); });
 

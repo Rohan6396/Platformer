@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#07111f">
   <meta name="description" content="Skybound Circuit DX — an unofficial Star Wars-inspired fan platformer with six worlds, bosses, Force powers, and local co-op.">
   <title>Skybound Circuit DX</title>
-  <link rel="stylesheet" href="styles.css?v=2.1.0">
+  <link rel="stylesheet" href="styles.css?v=2.1.1">
 </head>
 <body>
   <main id="app" aria-label="Skybound Circuit DX">
@@ -53,17 +53,19 @@
       </div>
 
       <label>
-        Difficulty
+        <span class="setting-label">Difficulty <output id="difficulty-value">Arcade</output></span>
         <select id="difficulty-select">
           <option value="easy">Explorer</option>
           <option value="normal">Arcade</option>
           <option value="hard">Overdrive</option>
         </select>
+        <small>Changing difficulty restarts the current stage when you select Done.</small>
       </label>
 
       <label>
-        Master volume
+        <span class="setting-label">Master volume <output id="volume-value">65%</output></span>
         <input id="volume-range" type="range" min="0" max="1" step="0.05" value="0.65">
+        <small>Drag to preview the current volume.</small>
       </label>
 
       <label class="check-row"><input id="reduced-motion" type="checkbox"> Reduce motion and screen shake</label>
@@ -96,11 +98,11 @@
   </dialog>
 
   <script src="https://cdn.jsdelivr.net/npm/p5@2.3.1/lib/p5.min.js"></script>
-  <script src="src/config.js?v=2.1.0"></script>
-  <script src="src/storage.js?v=2.1.0"></script>
-  <script src="src/input.js?v=2.1.0"></script>
-  <script src="src/audio.js?v=2.1.0"></script>
-  <script src="src/levels.js?v=2.1.0"></script>
-  <script src="sketch.js?v=2.1.0"></script>
+  <script src="src/config.js?v=2.1.1"></script>
+  <script src="src/storage.js?v=2.1.1"></script>
+  <script src="src/input.js?v=2.1.1"></script>
+  <script src="src/audio.js?v=2.1.1"></script>
+  <script src="src/levels.js?v=2.1.1"></script>
+  <script src="sketch.js?v=2.1.1"></script>
 </body>
 </html>

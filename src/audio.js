@@ -8,6 +8,7 @@
   let nextBeatAt = 0;
   let musicStep = 0;
   let resumePromise = null;
+  let lastPreviewAt = -Infinity;
 
   const melodies = [
     [523.25, 659.25, 783.99, 880, 783.99, 659.25, 587.33, 698.46],
@@ -61,6 +62,18 @@
     started = true;
     nextBeatAt = 0;
     resumeContext();
+    return true;
+  }
+
+  function previewVolume() {
+    if (!ensure() || settings.muted || settings.volume <= 0) return false;
+    started = true;
+    resumeContext().then((running) => {
+      if (!running || !context || context.state !== 'running') return;
+      if (context.currentTime - lastPreviewAt < 0.075) return;
+      lastPreviewAt = context.currentTime;
+      tone(659.25, 0.12, 0.085, 'triangle', 783.99);
+    });
     return true;
   }
 
@@ -123,8 +136,8 @@
     const melody = melodies[stageIndex % melodies.length];
     const note = melody[musicStep % melody.length];
     const bass = note / (musicStep % 4 === 0 ? 4 : 2);
-    tone(note, 0.19, 0.042, stageIndex === 3 ? 'square' : 'triangle');
-    if (musicStep % 2 === 0) tone(bass, 0.28, 0.032, 'sine');
+    tone(note, 0.21, 0.065, stageIndex === 3 ? 'square' : 'triangle');
+    if (musicStep % 2 === 0) tone(bass, 0.3, 0.045, 'sine');
     musicStep++;
     nextBeatAt = now + (stageIndex === 5 ? 0.245 : 0.31);
   }
@@ -138,5 +151,6 @@
   window.addEventListener('pointerdown', resumeOnGesture, { capture: true });
   window.addEventListener('keydown', resumeOnGesture, { capture: true });
   window.addEventListener('game-settings-changed', (event) => applySettings(event.detail));
-  window.GameAudio = { start, sfx, updateMusic, resetMusic, applySettings };
+  window.addEventListener('game-audio-preview', previewVolume);
+  window.GameAudio = { start, sfx, updateMusic, resetMusic, applySettings, previewVolume };
 })();
