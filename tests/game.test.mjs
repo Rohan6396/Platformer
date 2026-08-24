@@ -91,8 +91,8 @@ test('page exposes responsive, touch, settings, and accessible controls', async 
   const input = await source('src/input.js');
   const sketch = await source('sketch.js');
   assert.match(html, /p5@2\.3\.1/);
-  assert.match(html, /sketch\.js\?v=2\.2\.2/);
-  assert.match(html, /styles\.css\?v=2\.2\.2/);
+  assert.match(html, /sketch\.js\?v=2\.2\.3/);
+  assert.match(html, /styles\.css\?v=2\.2\.3/);
   assert.match(html, /id="touch-controls"/);
   assert.match(html, /aria-live="polite"/);
   assert.match(html, /id="settings-dialog"/);
@@ -189,6 +189,13 @@ test('difficulty and volume controls update settings, labels, and audio preview'
     preventDefault() { controlPrevented = true; }
   });
   assert.equal(controlPrevented, false, 'game controls must not block keyboard use of the difficulty buttons');
+
+  elements['settings-dialog'].open = false;
+  windowListeners.keydown[0]({ code: 'ArrowRight', repeat: false, preventDefault() {} });
+  assert.ok(dispatched.some((event) => event.type === 'game-key-command' && event.detail.code === 'ArrowRight'));
+  const commandCount = dispatched.filter((event) => event.type === 'game-key-command').length;
+  windowListeners.keydown[0]({ code: 'ArrowRight', repeat: true, preventDefault() {} });
+  assert.equal(dispatched.filter((event) => event.type === 'game-key-command').length, commandCount, 'held keys must not repeat scene commands');
 
   elements['music-test'].dispatch('click');
   assert.ok(dispatched.some((event) => event.type === 'game-audio-test'));
@@ -357,8 +364,9 @@ test('the settings dialog allows native keyboard events for its controls', async
 });
 
 test('Enter on the win screen immediately starts the next unlocked stage', async () => {
+  const listeners = {};
   const context = vm.createContext({
-    window: { addEventListener() {} },
+    window: { addEventListener: (type, listener) => { listeners[type] = listener; } },
     document: { getElementById: () => null },
     navigator: {},
     console,
@@ -376,14 +384,47 @@ test('Enter on the win screen immediately starts the next unlocked stage', async
   };
   vm.runInContext(await source('sketch.js'), context, { filename: 'sketch.js' });
   vm.runInContext(`
+    installGameEvents();
     selectedStage = 0;
     progress = { unlockedStages: 2, selectedStage: 1, selectedCharacter: 0 };
     scene = 'win';
     startRun = () => { window.startedStage = selectedStage; };
-    keyPressed();
   `, context);
+  listeners['game-key-command']({ detail: { code: 'Enter' } });
   assert.equal(context.window.startedStage, 1);
   assert.equal(context.savedStage, 1);
+});
+
+test('arrow keys select either Force path and Enter confirms it', async () => {
+  const listeners = {};
+  const context = vm.createContext({
+    window: { addEventListener: (type, listener) => { listeners[type] = listener; } },
+    document: { getElementById: () => null },
+    navigator: {}, console,
+    min: Math.min, max: Math.max
+  });
+  vm.runInContext(await source('src/config.js'), context, { filename: 'config.js' });
+  context.GameConfig = context.window.GameConfig;
+  context.GameStorage = {
+    loadSettings: () => ({ ...context.GameConfig.defaultSettings }),
+    loadProgress: () => ({ unlockedStages: 1, selectedStage: 0, selectedCharacter: 0 })
+  };
+  context.GameInput = { clear() {} };
+  vm.runInContext(await source('sketch.js'), context, { filename: 'sketch.js' });
+  vm.runInContext(`
+    installGameEvents();
+    scene = 'choice';
+    pendingChoice = { playerId: 0, selected: 'storm' };
+    players = [{ name: 'P1', lives: 2, maxLives: 3, powers: { storm: 0, gale: 0 } }];
+  `, context);
+  listeners['game-key-command']({ detail: { code: 'ArrowRight' } });
+  assert.equal(vm.runInContext('pendingChoice.selected', context), 'gale');
+  listeners['game-key-command']({ detail: { code: 'ArrowLeft' } });
+  assert.equal(vm.runInContext('pendingChoice.selected', context), 'storm');
+  listeners['game-key-command']({ detail: { code: 'ArrowRight' } });
+  listeners['game-key-command']({ detail: { code: 'Enter' } });
+  assert.equal(vm.runInContext('scene', context), 'playing');
+  assert.ok(vm.runInContext('players[0].powers.gale > 0', context));
 });
 
 test('music uses the bundled CC0 MP3 as a recoverable continuous loop', async () => {
@@ -437,7 +478,7 @@ test('music uses the bundled CC0 MP3 as a recoverable continuous loop', async ()
   await Promise.resolve();
   assert.equal(mediaInstances.length, 1);
   assert.equal(mediaInstances[0].loop, true);
-  assert.equal(mediaInstances[0].src, 'assets/audio/platformer-stage1.mp3?v=2.2.2');
+  assert.equal(mediaInstances[0].src, 'assets/audio/platformer-stage1.mp3?v=2.2.3');
   assert.equal(mediaInstances[0].playCalls, 1);
   assert.ok(statuses.includes('Playing'));
 

@@ -60,8 +60,12 @@
       saveAndNotify();
       return;
     }
+    const alreadyPressed = pressed.has(event.code);
     pressed.add(event.code);
     if (preventCodes.has(event.code)) event.preventDefault();
+    if (!alreadyPressed && !event.repeat) {
+      window.dispatchEvent(new CustomEvent('game-key-command', { detail: { code: event.code } }));
+    }
   }
 
   function handleKeyUp(event) {
