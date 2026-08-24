@@ -193,7 +193,7 @@
       musicTest.setAttribute('aria-pressed', String(previewing));
     });
     window.addEventListener('game-sfx-played', (event) => {
-      const labels = { zap: 'Lightning played', land: 'Landing played' };
+      const labels = { zap: 'Lightning played', land: 'Landing played', boss: 'Boss attack played' };
       sfxStatus.textContent = labels[event.detail] || 'Played';
     });
     reducedMotion.addEventListener('change', () => { settings.reducedMotion = reducedMotion.checked; saveAndNotify(); });

@@ -91,8 +91,8 @@ test('page exposes responsive, touch, settings, and accessible controls', async 
   const input = await source('src/input.js');
   const sketch = await source('sketch.js');
   assert.match(html, /p5@2\.3\.1/);
-  assert.match(html, /sketch\.js\?v=2\.2\.1/);
-  assert.match(html, /styles\.css\?v=2\.2\.1/);
+  assert.match(html, /sketch\.js\?v=2\.2\.2/);
+  assert.match(html, /styles\.css\?v=2\.2\.2/);
   assert.match(html, /id="touch-controls"/);
   assert.match(html, /aria-live="polite"/);
   assert.match(html, /id="settings-dialog"/);
@@ -263,7 +263,7 @@ test('taking damage does not leave the player permanently crouched', async () =>
   assert.equal(context.crouchingPlayer.crouching, true);
 });
 
-test('Imperial gates unlock after their guards fall and bosses launch shockwaves', async () => {
+test('Imperial gates unlock and bosses only attack players near their arena', async () => {
   const context = vm.createContext({
     window: { addEventListener() {} },
     document: {},
@@ -299,11 +299,20 @@ test('Imperial gates unlock after their guards fall and bosses launch shockwaves
     };
     updateBossAttack(window.testBoss, 1);
     window.projectileKinds = world.enemyProjectiles.map((projectile) => projectile.kind);
+
+    world.enemyProjectiles = [];
+    players = [{ active: true, alive: true, x: 120, y: 370, w: 32, h: 44 }];
+    window.testBoss.attackTimer = 0;
+    updateBossAttack(window.testBoss, 1);
+    window.offscreenProjectileCount = world.enemyProjectiles.length;
+    window.offscreenAttackTimer = window.testBoss.attackTimer;
   `, context);
   assert.equal(context.window.gateLocked, true);
   assert.equal(context.window.gateUnlocked, true);
   assert.ok(context.window.projectileKinds.filter((kind) => kind === 'bolt').length >= 4, JSON.stringify(context.window.projectileKinds));
   assert.equal(context.window.projectileKinds.filter((kind) => kind === 'shockwave').length, 2);
+  assert.equal(context.window.offscreenProjectileCount, 0);
+  assert.equal(context.window.offscreenAttackTimer, 30, 'off-screen boss timer is held until the player reaches the arena');
 });
 
 test('closing settings applies a new difficulty by restarting the active stage', async () => {
@@ -428,7 +437,7 @@ test('music uses the bundled CC0 MP3 as a recoverable continuous loop', async ()
   await Promise.resolve();
   assert.equal(mediaInstances.length, 1);
   assert.equal(mediaInstances[0].loop, true);
-  assert.equal(mediaInstances[0].src, 'assets/audio/platformer-stage1.mp3?v=2.2.1');
+  assert.equal(mediaInstances[0].src, 'assets/audio/platformer-stage1.mp3?v=2.2.2');
   assert.equal(mediaInstances[0].playCalls, 1);
   assert.ok(statuses.includes('Playing'));
 
