@@ -7,6 +7,7 @@
   let settings = GameStorage.loadSettings();
   let nextBeatAt = 0;
   let musicStep = 0;
+  let resumePromise = null;
 
   const melodies = [
     [523.25, 659.25, 783.99, 880, 783.99, 659.25, 587.33, 698.46],
@@ -18,6 +19,10 @@
   ];
 
   function ensure() {
+    if (context?.state === 'closed') {
+      context = null;
+      master = null;
+    }
     if (context) return true;
     const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextCtor) return false;
@@ -28,6 +33,19 @@
     return true;
   }
 
+  function resumeContext() {
+    if (!context || context.state === 'running') return Promise.resolve(true);
+    if (resumePromise) return resumePromise;
+    resumePromise = Promise.resolve(context.resume())
+      .then(() => {
+        nextBeatAt = 0;
+        return context.state === 'running';
+      })
+      .catch(() => false)
+      .finally(() => { resumePromise = null; });
+    return resumePromise;
+  }
+
   function applySettings(next) {
     settings = next || GameStorage.loadSettings();
     if (master && context) {
@@ -35,16 +53,23 @@
       master.gain.cancelScheduledValues(context.currentTime);
       master.gain.setTargetAtTime(value, context.currentTime, 0.025);
     }
+    if (started && !settings.muted && settings.volume > 0) resumeContext();
   }
 
   function start() {
-    if (!ensure()) return;
-    if (context.state === 'suspended') context.resume();
+    if (!ensure()) return false;
     started = true;
+    nextBeatAt = 0;
+    resumeContext();
+    return true;
   }
 
   function tone(frequency, duration = 0.1, volume = 0.06, wave = 'triangle', endFrequency) {
     if (!started || !ensure() || settings.muted || settings.volume <= 0) return;
+    if (context.state !== 'running') {
+      resumeContext();
+      return;
+    }
     const now = context.currentTime;
     const oscillator = context.createOscillator();
     const gain = context.createGain();
@@ -89,13 +114,17 @@
 
   function updateMusic(stageIndex, playing) {
     if (!playing || !started || !context || settings.muted || settings.volume <= 0) return;
+    if (context.state !== 'running') {
+      resumeContext();
+      return;
+    }
     const now = context.currentTime;
     if (now < nextBeatAt) return;
     const melody = melodies[stageIndex % melodies.length];
     const note = melody[musicStep % melody.length];
     const bass = note / (musicStep % 4 === 0 ? 4 : 2);
-    tone(note, 0.19, 0.026, stageIndex === 3 ? 'square' : 'triangle');
-    if (musicStep % 2 === 0) tone(bass, 0.28, 0.021, 'sine');
+    tone(note, 0.19, 0.042, stageIndex === 3 ? 'square' : 'triangle');
+    if (musicStep % 2 === 0) tone(bass, 0.28, 0.032, 'sine');
     musicStep++;
     nextBeatAt = now + (stageIndex === 5 ? 0.245 : 0.31);
   }
@@ -105,6 +134,9 @@
     nextBeatAt = 0;
   }
 
+  const resumeOnGesture = () => { if (started) resumeContext(); };
+  window.addEventListener('pointerdown', resumeOnGesture, { capture: true });
+  window.addEventListener('keydown', resumeOnGesture, { capture: true });
   window.addEventListener('game-settings-changed', (event) => applySettings(event.detail));
   window.GameAudio = { start, sfx, updateMusic, resetMusic, applySettings };
 })();
