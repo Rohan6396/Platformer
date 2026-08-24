@@ -179,7 +179,7 @@ function createPlayer(id, controlIndex, name, x, character, lives, fallbackColor
   return {
     id, controlIndex, name, active: true, alive: true, finished: false,
     x, y: 315, prevY: 315, w: 32, h: 44, vx: 0, vy: 0, facing: 1,
-    onGround: false, wasOnGround: false, crouching: false, big: true,
+    onGround: false, wasOnGround: false, airborneTimer: 0, crouching: false, big: true,
     lives, maxLives: lives, coins: 0, shards: 0, score: 0,
     coyoteTimer: 0, jumpBufferTimer: 0, jumpHeldPrev: false, attackHeldPrev: false,
     attackCooldown: 0, attackAnim: 0, stormTargets: [], hurtTimer: 0, invincibleTimer: 0,
@@ -281,6 +281,8 @@ function updatePlayer(player, step) {
   }
   player.prevY = player.y;
   player.wasOnGround = player.onGround;
+  if (player.onGround) player.airborneTimer = 0;
+  else player.airborneTimer += step;
   if (player.onGround) player.coyoteTimer = 8;
   if (player.jumpBufferTimer > 0 && (player.onGround || player.coyoteTimer > 0) && !player.crouching) jumpPlayer(player);
 
@@ -288,13 +290,15 @@ function updatePlayer(player, step) {
   collidePlayerWithSolids(player, 'x');
   player.vy = min(17, player.vy + 0.88 * step);
   player.y += player.vy * step;
+  const impactVelocity = player.vy;
   player.onGround = false;
   collidePlayerWithSolids(player, 'y');
 
-  if (!player.wasOnGround && player.onGround && player.vy === 0) {
+  if (!player.wasOnGround && player.onGround && player.airborneTimer >= 5 && impactVelocity >= 3) {
     spawnBurst(player.x + player.w / 2, player.y + player.h, player.trailColor, 6, 2.1);
     GameAudio.sfx('land');
   }
+  if (player.onGround) player.airborneTimer = 0;
   player.x = constrain(player.x, 0, CFG.STAGE_WIDTH - player.w);
   if (player.y > H + 150) damagePlayer(player, 'fell into the cloudbreak', true);
 }
@@ -692,6 +696,9 @@ function respawnPlayer(player) {
   player.y = 300;
   player.vx = 0;
   player.vy = 0;
+  player.onGround = false;
+  player.wasOnGround = false;
+  player.airborneTimer = 0;
   player.crouching = false;
   player.invincibleTimer = max(player.invincibleTimer, 135);
 }

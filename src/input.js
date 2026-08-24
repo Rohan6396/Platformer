@@ -187,8 +187,14 @@
     window.addEventListener('game-audio-status', (event) => {
       musicStatus.textContent = String(event.detail || 'Ready');
     });
+    window.addEventListener('game-music-preview', (event) => {
+      const previewing = Boolean(event.detail);
+      musicTest.textContent = previewing ? 'Stop music' : 'Test music';
+      musicTest.setAttribute('aria-pressed', String(previewing));
+    });
     window.addEventListener('game-sfx-played', (event) => {
-      sfxStatus.textContent = event.detail === 'zap' ? 'Lightning played' : 'Played';
+      const labels = { zap: 'Lightning played', land: 'Landing played' };
+      sfxStatus.textContent = labels[event.detail] || 'Played';
     });
     reducedMotion.addEventListener('change', () => { settings.reducedMotion = reducedMotion.checked; saveAndNotify(); });
     highContrast.addEventListener('change', () => { settings.highContrast = highContrast.checked; saveAndNotify(); });

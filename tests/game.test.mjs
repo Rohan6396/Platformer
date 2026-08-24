@@ -91,8 +91,8 @@ test('page exposes responsive, touch, settings, and accessible controls', async 
   const input = await source('src/input.js');
   const sketch = await source('sketch.js');
   assert.match(html, /p5@2\.3\.1/);
-  assert.match(html, /sketch\.js\?v=2\.2\.0/);
-  assert.match(html, /styles\.css\?v=2\.2\.0/);
+  assert.match(html, /sketch\.js\?v=2\.2\.1/);
+  assert.match(html, /styles\.css\?v=2\.2\.1/);
   assert.match(html, /id="touch-controls"/);
   assert.match(html, /aria-live="polite"/);
   assert.match(html, /id="settings-dialog"/);
@@ -377,10 +377,11 @@ test('Enter on the win screen immediately starts the next unlocked stage', async
   assert.equal(context.savedStage, 1);
 });
 
-test('music uses the existing CC0 Ogg track as a continuous media loop', async () => {
+test('music uses the bundled CC0 MP3 as a recoverable continuous loop', async () => {
   const mediaInstances = [];
   const listeners = {};
   const statuses = [];
+  const previewStates = [];
   const playedEffects = [];
   class FakeAudio {
     constructor() {
@@ -392,7 +393,7 @@ test('music uses the existing CC0 Ogg track as a continuous media loop', async (
     }
     addEventListener(type, listener) { this.listeners[type] = listener; }
     load() {}
-    pause() { this.paused = true; }
+    pause() { this.paused = true; this.listeners.pause?.(); }
     play() {
       this.playCalls++;
       this.paused = false;
@@ -408,6 +409,7 @@ test('music uses the existing CC0 Ogg track as a continuous media loop', async (
       addEventListener: (type, listener) => { listeners[type] = listener; },
       dispatchEvent: (event) => {
         if (event.type === 'game-audio-status') statuses.push(event.detail);
+        if (event.type === 'game-music-preview') previewStates.push(event.detail);
         if (event.type === 'game-sfx-played') playedEffects.push(event.detail);
       }
     },
@@ -426,7 +428,7 @@ test('music uses the existing CC0 Ogg track as a continuous media loop', async (
   await Promise.resolve();
   assert.equal(mediaInstances.length, 1);
   assert.equal(mediaInstances[0].loop, true);
-  assert.equal(mediaInstances[0].src, 'assets/audio/overworld-theme.ogg?v=2.2.0');
+  assert.equal(mediaInstances[0].src, 'assets/audio/platformer-stage1.mp3?v=2.2.1');
   assert.equal(mediaInstances[0].playCalls, 1);
   assert.ok(statuses.includes('Playing'));
 
@@ -436,6 +438,12 @@ test('music uses the existing CC0 Ogg track as a continuous media loop', async (
   listeners['game-audio-test']();
   await Promise.resolve();
   assert.ok(mediaInstances[0].playCalls >= 2);
+  assert.equal(previewStates.at(-1), true);
+  listeners['game-audio-test']();
+  assert.equal(previewStates.at(-1), false);
+  assert.equal(mediaInstances[0].paused, true, 'preview only stops when explicitly toggled off');
+  assert.equal(statuses.at(-1), 'Ready');
+  assert.doesNotMatch(await source('src/audio.js'), /musicPreviewUntil|4200/);
 
   listeners['game-sfx-test']();
   await Promise.resolve();
@@ -522,12 +530,21 @@ test('sound effects resume a suspended browser audio context instead of being dr
 });
 
 test('bundled soundtrack retains its CC0 source and checksum provenance', async () => {
-  const audio = await readFile(resolve(root, 'assets/audio/overworld-theme.ogg'));
+  const audio = await readFile(resolve(root, 'assets/audio/platformer-stage1.mp3'));
   const provenance = await source('assets/audio/README.md');
-  assert.equal(audio.subarray(0, 4).toString('ascii'), 'OggS');
+  assert.equal(audio[0], 0xff);
+  assert.equal(audio[1] & 0xe0, 0xe0, 'file begins with an MPEG audio frame sync');
   assert.ok(audio.length > 500_000);
-  assert.equal(createHash('sha256').update(audio).digest('hex'), '74c88ad5407f40528aa8b97d76b76bd04de39dbbc553cbef200284c879a4cb4a');
-  assert.match(provenance, /Louswan/);
+  assert.equal(createHash('sha256').update(audio).digest('hex'), 'fbba1e82e025ee1b5f9e96d983cadc4ad65a81db4d5c5269de5c63ee8c441e3e');
+  assert.match(provenance, /Guy G\. Gamerson/);
   assert.match(provenance, /CC0 1\.0 Universal/);
-  assert.match(provenance, /74c88ad5407f40528aa8b97d76b76bd04de39dbbc553cbef200284c879a4cb4a/);
+  assert.match(provenance, /fbba1e82e025ee1b5f9e96d983cadc4ad65a81db4d5c5269de5c63ee8c441e3e/);
+});
+
+test('landing effects require a real fall and ignore one-frame ground jitter', async () => {
+  const sketch = await source('sketch.js');
+  const audio = await source('src/audio.js');
+  assert.match(sketch, /airborneTimer >= 5 && impactVelocity >= 3/);
+  assert.match(sketch, /if \(player\.onGround\) player\.airborneTimer = 0/);
+  assert.match(audio, /land: \{ duration: 0\.07, tones: \[\[240, 165, 'triangle'/);
 });

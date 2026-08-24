@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const MUSIC_URL = 'assets/audio/overworld-theme.ogg?v=2.2.0';
+  const MUSIC_URL = 'assets/audio/platformer-stage1.mp3?v=2.2.1';
   let context = null;
   let master = null;
   let started = false;
@@ -11,13 +11,14 @@
   let musicElement = null;
   let musicPlayPromise = null;
   let musicWanted = false;
-  let musicPreviewUntil = 0;
+  let gameplayMusicWanted = false;
+  let musicPreviewing = false;
   const sfxPools = new Map();
   const sfxPoolIndexes = new Map();
 
   const effectSpecs = {
     jump: { duration: 0.14, tones: [[360, 680, 'triangle', 0.9]] },
-    land: { duration: 0.08, tones: [[125, 72, 'sine', 0.8]], noise: 0.08 },
+    land: { duration: 0.07, tones: [[240, 165, 'triangle', 0.34]] },
     coin: { duration: 0.13, tones: [[880, 880, 'square', 0.55], [1174.66, 1318.51, 'square', 0.45]] },
     shard: { duration: 0.24, tones: [[659.25, 987.77, 'triangle', 0.5], [987.77, 1318.51, 'triangle', 0.4]] },
     attack: { duration: 0.11, tones: [[280, 590, 'sawtooth', 0.8]], noise: 0.08 },
@@ -183,7 +184,17 @@
     musicElement.addEventListener?.('playing', () => reportMusic('Playing'));
     musicElement.addEventListener?.('waiting', () => reportMusic('Loading…'));
     musicElement.addEventListener?.('canplay', () => {
-      if (musicElement.paused && !musicWanted) reportMusic('Ready');
+      if (musicElement.paused && musicWanted) playMusicTrack();
+      else if (musicElement.paused) reportMusic('Ready');
+    });
+    musicElement.addEventListener?.('ended', () => {
+      if (!musicWanted) return;
+      resetMusic();
+      playMusicTrack();
+    });
+    musicElement.addEventListener?.('pause', () => {
+      if (musicWanted) playMusicTrack();
+      else reportMusic('Ready');
     });
     musicElement.addEventListener?.('error', () => reportMusic('Could not load'));
     musicElement.load?.();
@@ -298,7 +309,7 @@
   function playWebAudioEffect(type) {
     const effects = {
       jump: () => tone(360, 0.11, 0.07, 'triangle', 650),
-      land: () => tone(115, 0.055, 0.035, 'sine', 90),
+      land: () => tone(225, 0.045, 0.022, 'triangle', 155),
       coin: () => chord([880, 1174.66], 0.085, 0.09, 'square'),
       shard: () => chord([659.25, 987.77, 1318.51], 0.18, 0.11, 'triangle'),
       attack: () => tone(280, 0.08, 0.055, 'sawtooth', 560),
@@ -358,8 +369,8 @@
   }
 
   function updateMusic(_stageIndex, playing) {
-    const previewing = Date.now() < musicPreviewUntil;
-    musicWanted = Boolean(playing || previewing);
+    gameplayMusicWanted = Boolean(playing);
+    musicWanted = gameplayMusicWanted || musicPreviewing;
     if (!started || !ensureMusicTrack()) return;
     if (musicWanted) playMusicTrack();
     else if (!musicElement.paused) {
@@ -374,11 +385,25 @@
   }
 
   function testMusic() {
-    musicPreviewUntil = Date.now() + 4200;
-    musicWanted = true;
-    start();
-    resetMusic();
-    playMusicTrack();
+    musicPreviewing = !musicPreviewing;
+    dispatchStatus('game-music-preview', musicPreviewing);
+    musicWanted = gameplayMusicWanted || musicPreviewing;
+    if (musicPreviewing) {
+      start();
+      resetMusic();
+      playMusicTrack();
+    } else if (musicWanted) playMusicTrack();
+    else if (musicElement && !musicElement.paused) musicElement.pause();
+    return musicPreviewing;
+  }
+
+  function stopMusicPreview() {
+    if (!musicPreviewing) return;
+    musicPreviewing = false;
+    dispatchStatus('game-music-preview', false);
+    musicWanted = gameplayMusicWanted;
+    if (musicWanted) playMusicTrack();
+    else if (musicElement && !musicElement.paused) musicElement.pause();
   }
 
   function testSfx() {
@@ -396,5 +421,6 @@
   window.addEventListener('game-audio-preview', previewVolume);
   window.addEventListener('game-audio-test', testMusic);
   window.addEventListener('game-sfx-test', testSfx);
+  window.addEventListener('game-settings-closed', stopMusicPreview);
   window.GameAudio = { start, sfx, updateMusic, resetMusic, applySettings, previewVolume, testMusic, testSfx };
 })();
