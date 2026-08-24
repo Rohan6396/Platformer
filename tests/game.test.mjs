@@ -49,8 +49,8 @@ test('page exposes responsive, touch, settings, and accessible controls', async 
   const css = await source('styles.css');
   const input = await source('src/input.js');
   assert.match(html, /p5@2\.3\.1/);
-  assert.match(html, /sketch\.js\?v=2\.0\.1/);
-  assert.match(html, /styles\.css\?v=2\.0\.1/);
+  assert.match(html, /sketch\.js\?v=2\.0\.2/);
+  assert.match(html, /styles\.css\?v=2\.0\.2/);
   assert.match(html, /id="touch-controls"/);
   assert.match(html, /aria-live="polite"/);
   assert.match(html, /id="settings-dialog"/);
@@ -65,4 +65,46 @@ test('public-facing copy uses the original Skybound Circuit identity', async () 
   ].map(source)).then((parts) => parts.join('\n'));
   assert.doesNotMatch(combined, /Star Wars|lightsaber|dark side|light side|the Force/i);
   assert.match(combined, /Skybound Circuit DX/i);
+});
+
+test('taking damage does not leave the player permanently crouched', async () => {
+  const context = vm.createContext({
+    window: { addEventListener() {} },
+    document: {},
+    navigator: {},
+    console
+  });
+  vm.runInContext(await source('src/config.js'), context, { filename: 'config.js' });
+  context.GameConfig = context.window.GameConfig;
+  context.GameStorage = {
+    loadSettings: () => ({ ...context.GameConfig.defaultSettings }),
+    loadProgress: () => ({ unlockedStages: 1, selectedStage: 0, selectedCharacter: 0 })
+  };
+  vm.runInContext(await source('sketch.js'), context, { filename: 'sketch.js' });
+
+  context.damagedPlayer = {
+    big: false,
+    x: 100,
+    y: 100,
+    w: 32,
+    h: 44,
+    onGround: true,
+    crouching: false
+  };
+  vm.runInContext('updatePlayerSize(damagedPlayer, false)', context);
+  assert.equal(context.damagedPlayer.h, 30);
+  assert.equal(context.damagedPlayer.y, 114);
+  assert.equal(context.damagedPlayer.crouching, false);
+
+  context.crouchingPlayer = {
+    big: true,
+    x: 100,
+    y: 100,
+    w: 32,
+    h: 44,
+    onGround: true,
+    crouching: false
+  };
+  vm.runInContext('updatePlayerSize(crouchingPlayer, true)', context);
+  assert.equal(context.crouchingPlayer.crouching, true);
 });

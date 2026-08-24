@@ -242,7 +242,7 @@ function updatePlayerSize(player, down) {
     const feet = player.y + player.h;
     player.h = targetH;
     player.y = feet - player.h;
-    player.crouching = true;
+    player.crouching = wantsCrouch;
   } else if (targetH > player.h) {
     const next = { x: player.x, y: player.y - (targetH - player.h), w: player.w, h: targetH };
     if (!solidOverlap(next)) {
