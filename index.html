@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#07111f">
   <meta name="description" content="Skybound Circuit DX — an unofficial Star Wars-inspired fan platformer with six worlds, bosses, Force powers, and local co-op.">
   <title>Skybound Circuit DX</title>
-  <link rel="stylesheet" href="styles.css?v=2.1.2">
+  <link rel="stylesheet" href="styles.css?v=2.2.0">
 </head>
 <body>
   <main id="app" aria-label="Skybound Circuit DX">
@@ -65,11 +65,14 @@
       <div class="settings-field">
         <label class="setting-label" for="volume-range">Master volume <output id="volume-value">65%</output></label>
         <input id="volume-range" type="range" min="0" max="1" step="0.05" value="0.65">
-        <small>Drag to preview the current volume.</small>
-        <span class="audio-status-row">
-          Music <output id="music-status" aria-live="polite">Ready</output>
+        <small>Drag to preview the current volume. It controls both music and effects.</small>
+        <div class="audio-status-row">
+          <span>Music</span><output id="music-status" aria-live="polite">Ready</output>
           <button id="music-test" type="button">Test music</button>
-        </span>
+          <span>Effects</span><output id="sfx-status" aria-live="polite">Ready</output>
+          <button id="sfx-test" type="button">Test SFX</button>
+        </div>
+        <small class="music-credit">Music: “Overworld Theme” by Louswan · <a href="https://opengameart.org/content/overworld-theme-0" target="_blank" rel="noopener">CC0 source</a></small>
       </div>
 
       <label class="check-row"><input id="reduced-motion" type="checkbox"> Reduce motion and screen shake</label>
@@ -102,11 +105,11 @@
   </dialog>
 
   <script src="https://cdn.jsdelivr.net/npm/p5@2.3.1/lib/p5.min.js"></script>
-  <script src="src/config.js?v=2.1.2"></script>
-  <script src="src/storage.js?v=2.1.2"></script>
-  <script src="src/input.js?v=2.1.2"></script>
-  <script src="src/audio.js?v=2.1.2"></script>
-  <script src="src/levels.js?v=2.1.2"></script>
-  <script src="sketch.js?v=2.1.2"></script>
+  <script src="src/config.js?v=2.2.0"></script>
+  <script src="src/storage.js?v=2.2.0"></script>
+  <script src="src/input.js?v=2.2.0"></script>
+  <script src="src/audio.js?v=2.2.0"></script>
+  <script src="src/levels.js?v=2.2.0"></script>
+  <script src="sketch.js?v=2.2.0"></script>
 </body>
 </html>

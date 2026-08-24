@@ -134,9 +134,10 @@ dialog::backdrop { background: rgba(2, 7, 13, 0.82); backdrop-filter: blur(8px);
 .difficulty-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
 .difficulty-options button { min-width: 0; padding-inline: 7px; }
 .difficulty-options button.is-selected { color: #07111f; border-color: var(--gold); background: var(--gold); }
-.audio-status-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 9px; margin-top: 3px; }
+.audio-status-row { display: grid; grid-template-columns: auto minmax(90px, 1fr) auto; align-items: center; gap: 9px; margin-top: 3px; }
 .audio-status-row output { color: var(--cyan); font-weight: 800; }
 .audio-status-row button { min-height: 34px; padding-block: 5px; }
+.music-credit a { color: var(--cyan); }
 .settings-card select, .settings-card input[type="range"] { width: 100%; }
 .check-row { display: flex !important; grid-template-columns: auto 1fr; align-items: center; }
 .check-row input { width: 18px; height: 18px; }
@@ -190,6 +191,8 @@ body.high-contrast #game-shell { border-color: #fff; box-shadow: 0 0 0 3px #000,
   .touch-key.jump, .touch-key.attack { width: 60px; height: 60px; }
   .touch-cluster { gap: 6px; }
   .difficulty-options { grid-template-columns: 1fr; }
+  .audio-status-row { grid-template-columns: auto 1fr auto; }
+  .audio-status-row output { text-align: right; }
 }
 
 @media (prefers-reduced-motion: reduce) {

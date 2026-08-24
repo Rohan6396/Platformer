@@ -102,6 +102,8 @@
     const volumeValue = document.getElementById('volume-value');
     const musicStatus = document.getElementById('music-status');
     const musicTest = document.getElementById('music-test');
+    const sfxStatus = document.getElementById('sfx-status');
+    const sfxTest = document.getElementById('sfx-test');
     const reducedMotion = document.getElementById('reduced-motion');
     const highContrast = document.getElementById('high-contrast');
     let openedDifficulty = settings.difficulty;
@@ -179,8 +181,14 @@
     musicTest.addEventListener('click', () => {
       window.dispatchEvent(new CustomEvent('game-audio-test'));
     });
+    sfxTest.addEventListener('click', () => {
+      window.dispatchEvent(new CustomEvent('game-sfx-test'));
+    });
     window.addEventListener('game-audio-status', (event) => {
       musicStatus.textContent = String(event.detail || 'Ready');
+    });
+    window.addEventListener('game-sfx-played', (event) => {
+      sfxStatus.textContent = event.detail === 'zap' ? 'Lightning played' : 'Played';
     });
     reducedMotion.addEventListener('change', () => { settings.reducedMotion = reducedMotion.checked; saveAndNotify(); });
     highContrast.addEventListener('change', () => { settings.highContrast = highContrast.checked; saveAndNotify(); });

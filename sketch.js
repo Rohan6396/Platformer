@@ -182,7 +182,7 @@ function createPlayer(id, controlIndex, name, x, character, lives, fallbackColor
     onGround: false, wasOnGround: false, crouching: false, big: true,
     lives, maxLives: lives, coins: 0, shards: 0, score: 0,
     coyoteTimer: 0, jumpBufferTimer: 0, jumpHeldPrev: false, attackHeldPrev: false,
-    attackCooldown: 0, attackAnim: 0, hurtTimer: 0, invincibleTimer: 0,
+    attackCooldown: 0, attackAnim: 0, stormTargets: [], hurtTimer: 0, invincibleTimer: 0,
     rescueTimer: 0, checkpointX: x,
     shotMode: 'blaster',
     powers: { blaster: 0, frost: 0, prism: 0, storm: 0, gale: 0, shield: 0 },
@@ -225,7 +225,7 @@ function updatePlayerInputs(step) {
 
     if (jump && !player.jumpHeldPrev) player.jumpBufferTimer = 9;
     if (!jump && player.jumpHeldPrev && player.vy < -4.2) player.vy *= 0.48;
-    if (attack && !player.attackHeldPrev) performAttack(player);
+    if (attack && (!player.attackHeldPrev || (player.powers.storm > 0 && player.attackCooldown <= 0))) performAttack(player);
 
     updatePlayerSize(player, down);
     const maxSpeed = player.crouching ? 2.25 : player.big ? 5.05 : 5.35;
@@ -348,7 +348,17 @@ function performAttack(player) {
   if (player.powers.storm > 0) {
     player.attackCooldown = 10;
     const hitbox = frontHitbox(player, 172, 96);
-    world.enemies.filter((enemy) => enemy.alive && rectsOverlap(hitbox, enemy)).forEach((enemy) => damageEnemy(enemy, 1, player, 'storm'));
+    const targets = world.enemies.filter((enemy) => enemy.alive && rectsOverlap(hitbox, enemy));
+    player.stormTargets = (targets.length ? targets.slice(0, 4).map((enemy) => ({
+      x: enemy.x + enemy.w / 2,
+      y: enemy.y + enemy.h * 0.42
+    })) : [
+      { x: player.facing > 0 ? hitbox.x + hitbox.w : hitbox.x, y: hitbox.y + hitbox.h * 0.3 },
+      { x: player.facing > 0 ? hitbox.x + hitbox.w * 0.82 : hitbox.x + hitbox.w * 0.18, y: hitbox.y + hitbox.h * 0.72 }
+    ]);
+    targets.forEach((enemy) => damageEnemy(enemy, 1, player, 'storm'));
+    player.attackAnim = 10;
+    screenShake = max(screenShake, settings.reducedMotion ? 0 : 2.8);
     spawnBurst(hitbox.x + hitbox.w / 2, hitbox.y + hitbox.h / 2, '#8feaff', 14, 4.2);
     GameAudio.sfx('zap');
     return;
@@ -1148,6 +1158,7 @@ function drawWorld(theme) {
   drawEnemies(theme);
   drawProjectiles(theme);
   drawPlayers();
+  drawForceEffects();
   drawParticles();
 }
 
@@ -1489,6 +1500,80 @@ function drawPlayers() {
       spawnBurst(player.x + player.w / 2 - player.facing * 12, player.y + player.h - 2, player.trailColor, 1, 1.5);
     }
   });
+}
+
+function drawForceEffects() {
+  activePlayers().forEach((player) => {
+    if (!player.alive || player.powers.storm <= 0 || player.attackAnim <= 0) return;
+    const start = {
+      x: player.x + player.w / 2 + player.facing * player.w * 0.42,
+      y: player.y + player.h * 0.4
+    };
+    const targets = player.stormTargets?.length ? player.stormTargets : [{
+      x: start.x + player.facing * 168,
+      y: start.y
+    }];
+    push();
+    noFill();
+    strokeCap(ROUND);
+    targets.forEach((target, index) => drawLightningBolt(start, target, index));
+    noStroke();
+    fill(205, 244, 255, 220);
+    circle(start.x, start.y, 13 + sin(gameFrame * 1.7) * 3);
+    fill(255, 255, 255, 235);
+    circle(start.x, start.y, 5);
+    pop();
+  });
+}
+
+function drawLightningBolt(start, target, boltIndex) {
+  const dx = target.x - start.x;
+  const dy = target.y - start.y;
+  const length = max(1, sqrt(dx * dx + dy * dy));
+  const normalX = -dy / length;
+  const normalY = dx / length;
+  const amplitude = settings.reducedMotion ? 5 : 15;
+  const points = [];
+  const segments = 10;
+  for (let index = 0; index <= segments; index++) {
+    const amount = index / segments;
+    const edgeFade = sin(amount * PI);
+    const phase = gameFrame * 1.9 + index * 2.63 + boltIndex * 4.17;
+    const jitter = (sin(phase) + cos(phase * 1.71)) * amplitude * 0.5 * edgeFade;
+    points.push({
+      x: lerp(start.x, target.x, amount) + normalX * jitter,
+      y: lerp(start.y, target.y, amount) + normalY * jitter
+    });
+  }
+
+  stroke(68, 154, 255, 72);
+  strokeWeight(11);
+  beginShape();
+  points.forEach((point) => vertex(point.x, point.y));
+  endShape();
+  stroke(116, 218, 255, 235);
+  strokeWeight(4.5);
+  beginShape();
+  points.forEach((point) => vertex(point.x, point.y));
+  endShape();
+  stroke(255, 255, 255, 245);
+  strokeWeight(1.5);
+  beginShape();
+  points.forEach((point) => vertex(point.x, point.y));
+  endShape();
+
+  [3, 6, 8].forEach((index, branchIndex) => {
+    const point = points[index];
+    const branchLength = 18 + branchIndex * 6;
+    stroke(branchIndex % 2 ? 255 : 135, branchIndex % 2 ? 235 : 220, 255, 190);
+    strokeWeight(1.8);
+    line(point.x, point.y, point.x + normalX * branchLength + dx / length * 9, point.y + normalY * branchLength + dy / length * 9);
+  });
+  noStroke();
+  fill(132, 225, 255, 170);
+  circle(target.x, target.y, 18 + sin(gameFrame * 1.4 + boltIndex) * 5);
+  fill(255, 250, 195, 235);
+  circle(target.x, target.y, 6);
 }
 
 function drawRescueBubble(player) {
