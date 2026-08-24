@@ -867,6 +867,17 @@ function returnToMenu(nextStage = false) {
   showMessage('Choose the next circuit.');
 }
 
+function advanceAfterWin() {
+  if (selectedStage >= CFG.stages.length - 1) {
+    returnToMenu();
+    return;
+  }
+  selectedStage = min(progress.unlockedStages - 1, selectedStage + 1);
+  progress.selectedStage = selectedStage;
+  GameStorage.saveProgress(progress);
+  startRun();
+}
+
 function updateCamera(step) {
   const targets = activePlayers().filter((player) => player.alive && !player.finished);
   if (targets.length === 0) return;
@@ -1848,7 +1859,7 @@ function keyPressed() {
   if (scene === 'win') {
     if (key === 'r' || key === 'R') startRun();
     else if (key === 'm' || key === 'M') returnToMenu();
-    else if (keyCode === ENTER) returnToMenu(selectedStage < CFG.stages.length - 1);
+    else if (keyCode === ENTER) advanceAfterWin();
     return false;
   }
   return false;
